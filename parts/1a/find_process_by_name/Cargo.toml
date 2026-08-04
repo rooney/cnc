@@ -1,0 +1,11 @@
+[package]
+name = "find_process_by_name"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+windows-sys = {version="0.61", features=[
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+]}
