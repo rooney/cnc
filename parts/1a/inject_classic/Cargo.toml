@@ -1,0 +1,15 @@
+[package]
+name = "inject_classic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+windows-core = "0.62"
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_Security",
+] }
