@@ -1,0 +1,3 @@
+[submodule "parts/1b"]
+	path = parts/1b/venom-rs
+	url = git@github.com:memN0ps/venom-rs.git
