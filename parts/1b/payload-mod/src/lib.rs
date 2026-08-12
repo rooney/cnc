@@ -28,18 +28,18 @@ pub unsafe extern "system" fn DllMain(
 
 #[no_mangle]
 #[allow(non_snake_case)]
-fn SayHello(user_data: *mut c_void, user_data_len: u32) {
+fn Payload(user_data: *mut c_void, user_data_len: u32) {
     let user_data_slice =
         unsafe { core::slice::from_raw_parts(user_data as *const u8, user_data_len as _) };
     let user_data = std::str::from_utf8(user_data_slice).unwrap();
-    let message = format!("Hello from {}\0", user_data);
+    let message = format!("{}\0", user_data);
 
     unsafe {
         MessageBoxA(
-            0 as _,
+            GetForegroundWindow(),
             message.as_ptr() as _,
-            "SayHello!\0".as_ptr() as _,
-            0x0,
+            "Payload\0".as_ptr() as _,
+            MB_OK | MB_APPLMODAL,
         );
     }
 }
