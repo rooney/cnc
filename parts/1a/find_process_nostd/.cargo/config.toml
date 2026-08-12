@@ -1,0 +1,9 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "link-arg=/SUBSYSTEM:CONSOLE",
+    "-C", "link-arg=/defaultlib:vcruntime",
+    "-C", "link-arg=/defaultlib:ucrt",
+]

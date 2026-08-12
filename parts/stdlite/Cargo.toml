@@ -1,0 +1,14 @@
+[package]
+name = "stdlite"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+utf16_lit = "2.0.2"
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Console",
+    "Win32_System_Environment",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
