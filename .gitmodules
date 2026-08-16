@@ -1,6 +1,6 @@
-[submodule "parts/1b"]
-	path = parts/1b/venom-rs
+[submodule "venomrs"]
+	path = submodules/venom-rs
 	url = git@github.com:memN0ps/venom-rs.git
-[submodule "parts/SysWhispers3"]
-	path = parts/syswhispers3
+[submodule "syswhispers3"]
+	path = submodules/syswhispers3
 	url = git@github.com:klezVirus/SysWhispers3.git
