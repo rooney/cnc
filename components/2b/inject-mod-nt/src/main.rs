@@ -36,7 +36,7 @@ fn main() {
     // Get a handle to the target process with PROCESS_ALL_ACCESS
     let process_handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
 
-    if process_handle == 0 {
+    if process_handle.is_null() {
         panic!("Failed to open a handle to the target process");
     }
 
@@ -132,7 +132,7 @@ fn get_process_id_by_name(process_name: &str) -> Result<u32, String> {
 
 
 /// Converts a C null terminated String to a Rust String
-pub fn convert_c_array_to_rust_string(buffer: Vec<u8>) -> String {
+pub fn convert_c_array_to_rust_string(buffer: Vec<i8>) -> String {
     let mut rust_string: Vec<u8> = Vec::new();
     for char in buffer {
         if char == 0 {

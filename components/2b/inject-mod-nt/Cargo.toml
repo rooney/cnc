@@ -11,7 +11,7 @@ edition = "2021"
 clap = {version = "4.3.0", features = ["derive"] }
 
 [dependencies.windows-sys]
-version = "0.48.0"
+version = "0.61"
 features = [
     "Win32_Foundation",
     "Win32_Security",
