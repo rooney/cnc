@@ -1,0 +1,23 @@
+[package]
+name = "inject-indirect-sw3-spoof"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = {version = "4.3.0", features = ["derive"] }
+ntapi = "0.4"
+windows-core = "0.62"
+
+[dependencies.winapi]
+version = "0.3"
+features = ["processthreadsapi"]
+
+[dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_System_Memory",
+    "Win32_System_Diagnostics_ToolHelp",
+]
+
+[build-dependencies]
+cc = "1"
