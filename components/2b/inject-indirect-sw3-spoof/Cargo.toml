@@ -8,6 +8,13 @@ clap = {version = "4.3.0", features = ["derive"] }
 ntapi = "0.4"
 windows-core = "0.62"
 
+[dependencies.unwinder]
+version = "0.1"
+features = [
+    # "Experimental",
+    # "lazy_static",
+]
+
 [dependencies.uwd]
 version = "0.3"
 features = [
@@ -29,4 +36,5 @@ features = [
 cc = "1"
 
 [patch.crates-io]
+unwinder = { path = "vendor/unwinder" }
 uwd = { path = "vendor/uwd" }
