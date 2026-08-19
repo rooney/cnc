@@ -1,0 +1,15 @@
+#!/bin/bash
+if [ -f "/opt/homebrew/opt/llvm/bin/llvm-ml" ]; then
+    LLVM_ML="/opt/homebrew/opt/llvm/bin/llvm-ml"
+elif [ -f "/usr/local/opt/llvm/bin/llvm-ml" ]; then
+    LLVM_ML="/usr/local/opt/llvm/bin/llvm-ml"
+else
+    LLVM_ML=$(which llvm-ml 2>/dev/null)
+fi
+
+if [ -z "$LLVM_ML" ]; then
+    echo "Error: llvm-ml executable not found. Ensure LLVM is installed via 'brew install llvm'." >&2
+    exit 1
+fi
+
+exec "$LLVM_ML" -m64 "$@"
