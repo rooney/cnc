@@ -5,7 +5,7 @@
 ;;
 ;; Export
 ;;
-Spoof proto
+EXTERN Spoof:PROC
 
 .data
 
