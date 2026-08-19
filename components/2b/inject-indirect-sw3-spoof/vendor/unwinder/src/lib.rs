@@ -2278,8 +2278,10 @@ fn get_runtime_table(image_ptr: *mut c_void) -> (*mut dinvoke_rs::data::RuntimeF
             let s = std::str::from_utf8(&section.Name).unwrap();
             if s.contains(".pdata") 
             {
-                let base = image_ptr as isize;
-                runtime = std::mem::transmute(base + section.VirtualAddress as isize);
+                let base = image_ptr as *mut u8;
+                runtime = base
+                    .add(section.VirtualAddress as usize)
+                    .cast::<RuntimeFunction>();
                 size = section.SizeOfRawData;
                 return (runtime, size);
             }
