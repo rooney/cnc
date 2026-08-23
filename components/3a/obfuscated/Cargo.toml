@@ -1,0 +1,15 @@
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "obfuscated"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+non_obfuscated = { path = "../non_obfuscated" }
+
+[profile.release]
+codegen-units = 1
+
+[profile.release.package.obfuscated]
+rustflags = ["-Zllvm-plugins=../../../submodules/amice/target/release/libamice.dylib"]

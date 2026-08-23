@@ -1,0 +1,131 @@
+[env]
+# =====================================================================
+# TIER 1 — Independent passes. Safe to combine with anything below.
+# Each targets a different thing (strings, calls, memory access, data
+# layout), so they don't meaningfully overlap or fight each other.
+# =====================================================================
+
+# String Encryption: encrypts string literals, decrypts at runtime.
+AMICE_STRING_ENCRYPTION = "true"
+AMICE_STRING_ALGORITHM = "xor"
+# Required alongside it for Rust: Rust doesn't emit string literals the
+# same way C does, so this widens what the pass targets.
+AMICE_STRING_ONLY_DOT_STRING = "false"
+
+# Indirect Call: rewrites direct calls into function-table/index calls.
+# Complements Function Wrapper below (different layer: call target vs.
+# call site), safe to run together.
+# AMICE_INDIRECT_CALL = "true"
+
+# Function Wrapper: wraps call sites in proxy trampolines.
+# AMICE_FUNCTION_WRAPPER = "true"
+
+# Clone Function: specializes/clones functions called with constant args.
+# NOTE: if you also enable a heavy CFG pass below (FLATTEN / VM_FLATTEN /
+# VM_VIRTUALIZE), each clone this pass generates gets run through that
+# heavy pass too — clones multiply your compile-time cost, so if builds
+# get slow, this is one of the first things to turn off.
+# AMICE_CLONE_FUNCTION = "true"
+
+# Alias Access: pointer-chain-based obfuscation for memory access.
+# AMICE_ALIAS_ACCESS = "true"
+
+# MBA: rewrites arithmetic as Mixed Boolean-Arithmetic expressions.
+# NOTE: if AMICE_VM_VIRTUALIZE (below) is also on, VM_VIRTUALIZE already
+# turns arithmetic into interpreted bytecode, so MBA's contribution to
+# your original code is largely moot for whichever functions get fully
+# virtualized — not harmful, just redundant on those specific functions.
+# Fine to leave on; just don't expect it to add much if you're using
+# VM_VIRTUALIZE.
+# AMICE_MBA = "true"
+
+# =====================================================================
+# TIER 2 — Pre-processing / structural passes. Generally safe on their
+# own, but their *value* depends on which CFG strategy you pick in
+# Tier 3 below. See notes on each.
+# =====================================================================
+
+# Split Basic Block: splits basic blocks into smaller ones.
+# Classic pairing: run this *before* FLATTEN (Tier 3) — more, smaller
+# blocks make the flattened dispatcher harder to read. Good combo.
+# Less useful (but not harmful) if you're using VM_VIRTUALIZE instead,
+# since that pass rewrites the function wholesale anyway.
+# AMICE_SPLIT_BASIC_BLOCK = "true"
+
+# Lower Switch: lowers `switch` into if-else chains.
+# NOTE: AMICE_FLATTEN already does this internally by default
+# (flatten_lower_switch=true), so if you're using FLATTEN, this is
+# likely redundant (harmless — just a no-op second pass over code that
+# has no switches left). It matters more if you're using BOGUS_CONTROL_FLOW
+# or INDIRECT_BRANCH *without* FLATTEN, since those don't lower switches
+# themselves.
+# AMICE_LOWER_SWITCH = "true"
+
+# =====================================================================
+# TIER 3 — CFG obfuscation strategy. PICK ONE. Do not enable more than
+# one of these three — they all attack the same thing (the function's
+# control-flow shape), just at different intensity levels, and stacking
+# them means re-obfuscating an already-obfuscated (and stranger-shaped)
+# CFG for little benefit and real risk of a miscompile or crash.
+#
+#   AMICE_FLATTEN         - lightest, fastest, classic OLLVM-style
+#   AMICE_VM_FLATTEN      - heavier: interprets control flow via bytecode
+#   AMICE_VM_VIRTUALIZE   - heaviest: interprets the ENTIRE function
+#                           (control flow + arithmetic + everything) via
+#                           bytecode. This already subsumes what
+#                           VM_FLATTEN does, so never combine the two.
+#
+# Uncomment exactly one of the three blocks below.
+# =====================================================================
+
+# --- Option A: FLATTEN (default here — fastest to build, good for iterating) ---
+AMICE_FLATTEN = "true"
+# AMICE_FLATTEN_MODE = "dominator"   # or "basic" (default)
+
+# --- Option B: VM_FLATTEN (heavier) ---
+# AMICE_VM_FLATTEN = "true"
+
+# --- Option C: VM_VIRTUALIZE (heaviest — expect much slower builds/bigger binaries) ---
+# AMICE_VM_VIRTUALIZE = "true"
+
+# =====================================================================
+# TIER 4 — Additional control-flow noise. Safe to pair with FLATTEN
+# (Option A) — this is the classic OLLVM "triad" (flatten + bogus CF +
+# split block) and is a well-trodden, effective combo.
+#
+# CAUTION if paired with VM_FLATTEN or VM_VIRTUALIZE instead (Options B/C):
+# those passes already restructure the function into a dispatcher/
+# interpreter loop, so applying more branch-level noise afterward is
+# operating on machinery the VM pass generated, not your original logic.
+# Not necessarily broken, but it's an untested combination and more
+# likely to produce something fragile or hard to reason about. If you
+# switch to Option B or C above, consider turning these two off.
+# =====================================================================
+
+# Indirect Branch: rewrites branches into indirectbr w/ dummy blocks,
+# table reordering, index encryption.
+# AMICE_INDIRECT_BRANCH = "true"
+
+# Bogus Control Flow: inserts fake/equivalent branches.
+# AMICE_BOGUS_CONTROL_FLOW = "true"
+# AMICE_BOGUS_CONTROL_FLOW_MODE = "polaris-primes"   # or "basic" (default)
+
+# =====================================================================
+# NOT ENABLED — listed as in-progress / untested for Rust specifically.
+# Uncomment to experiment, but expect these may misbehave.
+#
+# Extra caution: AMICE_BASIC_BLOCK_OUTLINING and AMICE_SHUFFLE_BLOCKS
+# both operate on a function's basic blocks directly. If you're using
+# VM_VIRTUALIZE (Option C above), the "blocks" that exist by the time
+# these passes would run are the VM interpreter's own dispatch blocks,
+# not your original function's blocks — so combining either of these
+# with VM_VIRTUALIZE is unlikely to do anything meaningful and is more
+# likely to just waste compile time or hit an edge case the pass wasn't
+# written for.
+# =====================================================================
+
+# AMICE_CUSTOM_CALLING_CONV = "true"      # Not usable yet, per docs
+# AMICE_DELAY_OFFSET_LOADING = "true"     # Delayed Offset Loading (AMA)
+# AMICE_PARAM_AGGREGATE = "true"          # Param Aggregate
+# AMICE_BASIC_BLOCK_OUTLINING = "true"    # Basic Block Outlining (BB2Func)
+# AMICE_SHUFFLE_BLOCKS = "true"           # Shuffle Blocks
