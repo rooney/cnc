@@ -1,9 +1,12 @@
-[submodule "venomrs"]
+[submodule "venom-rs"]
 	path = submodules/venom-rs
-	url = git@github.com:memN0ps/venom-rs.git
+	url = https://github.com/memN0ps/venom-rs.git
 [submodule "syswhispers3"]
 	path = submodules/syswhispers3
-	url = git@github.com:klezVirus/SysWhispers3.git
-[submodule "submodules/amice"]
+	url = https://github.com/klezVirus/SysWhispers3.git
+[submodule "amice"]
 	path = submodules/amice
 	url = https://github.com/fuqiuluo/amice.git
+[submodule "rustc2"]
+	path = submodules/rustc2
+	url = https://github.com/Zeeshan12340/RustC2.git
