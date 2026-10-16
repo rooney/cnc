@@ -1,0 +1,81 @@
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index d8cba7d..15ee79f 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -53,28 +53,60 @@ use winreg::enums::*;
+ #[cfg(windows)]
+ use winreg::RegKey;
+ 
++#[cfg(windows)]
++use windows::Win32::NetworkManagement::IpHelper::{GetAdaptersInfo, IP_ADAPTER_INFO};
++#[cfg(windows)]
++use windows::Win32::Foundation::ERROR_SUCCESS;
++
+ #[cfg(windows)]
+ pub fn check_vm_artifacts() {
+-    // Checking for common VMware registry keys
++    // 1. Check MAC addresses
++    unsafe {
++        let mut buffer_size: u32 = 0;
++        let _ = GetAdaptersInfo(None, &mut buffer_size);
++        let mut buffer = vec![0u8; buffer_size as usize];
++        let adapter_info = buffer.as_mut_ptr() as *mut IP_ADAPTER_INFO;
++
++        if GetAdaptersInfo(Some(adapter_info), &mut buffer_size) == ERROR_SUCCESS {
++            let mut curr = adapter_info;
++            while !curr.is_null() {
++                let mac = (*curr).Address;
++                // VMware: 00:05:69, 00:0C:29, 00:1C:14, 00:50:56
++                // VirtualBox: 08:00:27
++                if (mac[0] == 0x00 && mac[1] == 0x05 && mac[2] == 0x69)
++                    || (mac[0] == 0x00 && mac[1] == 0x0C && mac[2] == 0x29)
++                    || (mac[0] == 0x00 && mac[1] == 0x1C && mac[2] == 0x14)
++                    || (mac[0] == 0x00 && mac[1] == 0x50 && mac[2] == 0x56)
++                    || (mac[0] == 0x08 && mac[1] == 0x00 && mac[2] == 0x27)
++                {
++                    println!("Virtualization detected (MAC)! Exiting program.");
++                    exit(1);
++                }
++                curr = (*curr).Next;
++            }
++        }
++    }
++
++    // 2. Checking for common VMware/VirtualBox registry keys
+     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+-    
++
+     // VMware Tools key
+     if let Ok(_key) = hklm.open_subkey("SOFTWARE\\VMware, Inc.\\VMware Tools") {
+-        println!("VMware detected! Exiting program.");
++        println!("Virtualization detected (VMware)! Exiting program.");
+         exit(1);
+     }
+-    
+-    // System BIOS Version for VMware indicator
++
++    // System BIOS Version for VM indicators
+     if let Ok(key) = hklm.open_subkey("HARDWARE\\Description\\System") {
+         if let Ok(bios_version) = key.get_value::<String, _>("SystemBiosVersion") {
+             if bios_version.contains("VMware") || bios_version.contains("VBOX") {
+-                println!("Virtualization detected! Exiting program.");
++                println!("Virtualization detected (BIOS)! Exiting program.");
+                 exit(1);
+             }
+         }
+         if let Ok(system_version) = key.get_value::<String, _>("SystemVersion") {
+             if system_version.contains("VirtualBox") {
+-                println!("Virtualization detected! Exiting program.");
++                println!("Virtualization detected (Version)! Exiting program.");
+                 exit(1);
+             }
+         }
+@@ -82,7 +114,7 @@ pub fn check_vm_artifacts() {
+ 
+     // VirtualBox Guest Additions key
+     if let Ok(_key) = hklm.open_subkey("SOFTWARE\\Oracle\\VirtualBox Guest Additions") {
+-        println!("Virtualization detected! Exiting program.");
++        println!("Virtualization detected (VBox)! Exiting program.");
+         exit(1);
+     }
+ }

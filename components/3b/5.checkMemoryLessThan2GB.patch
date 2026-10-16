@@ -1,0 +1,13 @@
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index c48dcb7..fb20a79 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -19,7 +19,7 @@ pub fn check_memory_limit() {
+     system.refresh_memory();
+ 
+     let total_memory = system.total_memory();
+-    if total_memory < 4_000_000_000 {
++    if total_memory < 2_000_000_000 {
+         // Less than 4GB — likely sandboxed
+         println!("Program is likely running in a sandboxed environment.");
+         exit(1);
