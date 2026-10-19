@@ -10,3 +10,6 @@
 [submodule "rustc2"]
 	path = submodules/rustc2
 	url = https://github.com/Zeeshan12340/RustC2.git
+[submodule "furtim"]
+	path = submodules/furtim
+	url = https://github.com/Timmphy/Furtim-Advanced-Rust-Dropper.git
