@@ -1,0 +1,56 @@
+From e22b9b38ee48ba21b9fc90f68dc56b16d4bab23e Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 14 Oct 2026 07:40:26 +0700
+Subject: [PATCH 02/14] PEBBeingDebugged
+
+---
+ client/src/sandbox.rs | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index adb005d..ca1a488 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -6,7 +6,13 @@ use std::thread::sleep;
+ #[cfg(windows)]
+ use winapi::um::debugapi::{IsDebuggerPresent, CheckRemoteDebuggerPresent};
+ #[cfg(windows)]
+-use winapi::um::processthreadsapi::GetCurrentProcess;
++use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId};
++#[cfg(windows)]
++use winapi::um::winnt::PEB;
++#[cfg(windows)]
++use winapi::um::winternl::{NtQueryInformationProcess, PROCESS_BASIC_INFORMATION};
++#[cfg(windows)]
++use winapi::shared::ntdef::NT_SUCCESS;
+ 
+ pub fn check_memory_limit() {
+     let mut system = System::new_all();
+@@ -39,11 +45,24 @@ pub fn sleep_evasion(sleep_duration: Duration) {
+ #[cfg(windows)]
+ pub fn check_debugger() {
+     unsafe {
++        // 1. IsDebuggerPresent and CheckRemoteDebuggerPresent
+         let mut is_remote_debugger_present = 0;
+         if IsDebuggerPresent() != 0 || (CheckRemoteDebuggerPresent(GetCurrentProcess(), &mut is_remote_debugger_present) != 0 && is_remote_debugger_present != 0) {
+             println!("Debugger detected! Exiting program.");
+             exit(1);
+         }
++
++        // 2. Check PEB BeingDebugged flag
++        // On x64, the PEB pointer is at GS:[0x60]. On x86, it's at FS:[0x30].
++        #[cfg(target_arch = "x86_64")]
++        let being_debugged = *(std::arch::x86_64::__readgsqword(0x60) as *const u8).add(2);
++        #[cfg(target_arch = "x86")]
++        let being_debugged = *(std::arch::x86::__readfsdword(0x30) as *const u8).add(2);
++
++        if being_debugged != 0 {
++            println!("Debugger detected via PEB flag! Exiting program.");
++            exit(1);
++        }
+     }
+ }
+ 
+-- 
+2.39.5 (Apple Git-154)
+

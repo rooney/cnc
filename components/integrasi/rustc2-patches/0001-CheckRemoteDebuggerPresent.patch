@@ -1,0 +1,37 @@
+From ca10f9695a07aca5a65decfb9643034c61ddc177 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 14 Oct 2026 07:36:09 +0700
+Subject: [PATCH 01/14] CheckRemoteDebuggerPresent
+
+---
+ client/src/sandbox.rs | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index e50d3aa..adb005d 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -4,7 +4,9 @@ use std::time::{Instant, SystemTime, Duration};
+ use std::thread::sleep;
+ 
+ #[cfg(windows)]
+-use winapi::um::debugapi::IsDebuggerPresent;
++use winapi::um::debugapi::{IsDebuggerPresent, CheckRemoteDebuggerPresent};
++#[cfg(windows)]
++use winapi::um::processthreadsapi::GetCurrentProcess;
+ 
+ pub fn check_memory_limit() {
+     let mut system = System::new_all();
+@@ -37,7 +39,8 @@ pub fn sleep_evasion(sleep_duration: Duration) {
+ #[cfg(windows)]
+ pub fn check_debugger() {
+     unsafe {
+-        if IsDebuggerPresent() != 0 {
++        let mut is_remote_debugger_present = 0;
++        if IsDebuggerPresent() != 0 || (CheckRemoteDebuggerPresent(GetCurrentProcess(), &mut is_remote_debugger_present) != 0 && is_remote_debugger_present != 0) {
+             println!("Debugger detected! Exiting program.");
+             exit(1);
+         }
+-- 
+2.39.5 (Apple Git-154)
+

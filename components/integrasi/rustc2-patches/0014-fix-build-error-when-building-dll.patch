@@ -1,0 +1,52 @@
+From dec0d704bd509cab6ca7f728af7295cd3ec09864 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 21 Oct 2026 09:52:55 +0700
+Subject: [PATCH 14/14] fix build error when building dll
+
+---
+ client/Cargo.toml |  1 +
+ client/build.rs   | 11 +++++++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/client/Cargo.toml b/client/Cargo.toml
+index 6e6ef62..0c34c7f 100644
+--- a/client/Cargo.toml
++++ b/client/Cargo.toml
+@@ -27,6 +27,7 @@ cc = "1.0"
+ daemonize = "0.5"
+ 
+ [lib]
++name = "client_lib"
+ crate-type = ["cdylib"]
+ 
+ [target.'cfg(windows)'.dependencies]
+diff --git a/client/build.rs b/client/build.rs
+index 8ad3f1a..146b725 100644
+--- a/client/build.rs
++++ b/client/build.rs
+@@ -13,6 +13,13 @@ fn main() {
+ 
+     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+ 
++    // Rename libsyscalls.a to syscalls.lib for lld-link
++    let lib_path = out_dir.join("libsyscalls.a");
++    let lib_lib_path = out_dir.join("syscalls.lib");
++    if lib_path.exists() {
++        std::fs::rename(&lib_path, &lib_lib_path).expect("failed to rename library");
++    }
++
+     let asm_obj = out_dir.join("swdefault-asm.x64.obj");
+ 
+     let llvm_prefix = std::env::var("LLVM_PREFIX")
+@@ -34,4 +41,8 @@ fn main() {
+     assert!(status.success(), "llvm-ml failed");
+ 
+     println!("cargo:rustc-link-arg={}", asm_obj.display());
++    // cargo only forwards `rustc-link-lib` to the package's lib target (the cdylib),
++    // but the bin target links these objects too (via the asm obj above) and needs
++    // SW3_GetSyscallNumber from the C archive. link-arg is passed to both targets.
++    println!("cargo:rustc-link-arg={}", lib_lib_path.display());
+ }
+-- 
+2.39.5 (Apple Git-154)
+

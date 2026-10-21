@@ -1,0 +1,42 @@
+From 8b7133ef3e3f22f177cdc4bae1973b242c4b2160 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 14 Oct 2026 08:09:55 +0700
+Subject: [PATCH 07/14] checkVirtualBox
+
+---
+ client/src/sandbox.rs | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index 58a1b7c..d8cba7d 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -67,11 +67,23 @@ pub fn check_vm_artifacts() {
+     // System BIOS Version for VMware indicator
+     if let Ok(key) = hklm.open_subkey("HARDWARE\\Description\\System") {
+         if let Ok(bios_version) = key.get_value::<String, _>("SystemBiosVersion") {
+-            if bios_version.contains("VMware") {
+-                println!("VMware detected! Exiting program.");
++            if bios_version.contains("VMware") || bios_version.contains("VBOX") {
++                println!("Virtualization detected! Exiting program.");
+                 exit(1);
+             }
+         }
++        if let Ok(system_version) = key.get_value::<String, _>("SystemVersion") {
++            if system_version.contains("VirtualBox") {
++                println!("Virtualization detected! Exiting program.");
++                exit(1);
++            }
++        }
++    }
++
++    // VirtualBox Guest Additions key
++    if let Ok(_key) = hklm.open_subkey("SOFTWARE\\Oracle\\VirtualBox Guest Additions") {
++        println!("Virtualization detected! Exiting program.");
++        exit(1);
+     }
+ }
+ 
+-- 
+2.39.5 (Apple Git-154)
+

@@ -1,0 +1,60 @@
+From cd9fcdee799762d8e9f6dda9e9f761750cb9d9ee Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 21 Oct 2026 08:45:39 +0700
+Subject: [PATCH 09/10] ganti uwd dengan unwinder
+
+---
+ inject/.cargo/config.toml  | 8 ++++++++
+ inject/Cargo.toml          | 7 +++++++
+ inject/rust-toolchain.toml | 2 ++
+ 3 files changed, 17 insertions(+)
+ create mode 100644 inject/.cargo/config.toml
+ create mode 100644 inject/rust-toolchain.toml
+
+diff --git a/inject/.cargo/config.toml b/inject/.cargo/config.toml
+new file mode 100644
+index 0000000..9af0b87
+--- /dev/null
++++ b/inject/.cargo/config.toml
+@@ -0,0 +1,8 @@
++[env]
++# String Encryption: encrypts string literals, decrypts at runtime.
++AMICE_STRING_ENCRYPTION = "true"
++AMICE_STRING_ALGORITHM = "xor"
++AMICE_STRING_ONLY_DOT_STRING = "false"
++
++# CFG Obfuscation
++AMICE_FLATTEN = "true"
+diff --git a/inject/Cargo.toml b/inject/Cargo.toml
+index 9aa6b87..c346c6d 100644
+--- a/inject/Cargo.toml
++++ b/inject/Cargo.toml
+@@ -1,3 +1,4 @@
++cargo-features = ["profile-rustflags"]
+ [package]
+ name = "inject"
+ version = "0.1.0"
+@@ -23,6 +24,12 @@ rand = "0.8.5"
+ rand_core = "0.6.4"
+ base64 = { version = "0.22.1", features = ["std"] }
+ 
++[profile.release]
++codegen-units = 1
++
++[profile.release.package.inject]
++rustflags = ["-Zllvm-plugins=../../../submodules/amice/target/release/libamice.dylib"]
++
+ [dependencies.windows-sys]
+ version = "0.52.0"
+ features = [
+diff --git a/inject/rust-toolchain.toml b/inject/rust-toolchain.toml
+new file mode 100644
+index 0000000..b18c81f
+--- /dev/null
++++ b/inject/rust-toolchain.toml
+@@ -0,0 +1,2 @@
++[toolchain]
++channel = "nightly-2026-08-05"
+-- 
+2.39.5 (Apple Git-154)
+

